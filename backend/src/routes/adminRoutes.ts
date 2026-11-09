@@ -1,0 +1,95 @@
+import { Router } from 'express';
+import { authenticate, requireAdmin } from '../middleware/auth';
+import { asyncHandler } from '../utils/asyncHandler';
+import {
+  createAdminTelegramLink,
+  deleteAdminTelegramLink,
+  getAdminTelegramStatus,
+  testAdminTelegram,
+} from '../controllers/telegramController';
+import {
+  getManualNotifications,
+  markManualNotificationSent,
+} from '../controllers/manualNotificationController';
+import {
+  getLiveSeats,
+  createStudent,
+  getStudents,
+  getStudentById,
+  getAssignableStudentSeats,
+  editStudent,
+  updateStudentStatus,
+  resetStudentPin,
+  deleteStudent,
+  getStudentAttendance,
+  getSessions,
+  forceCheckout,
+  getFees,
+  markFeePaid,
+  generateFeesManual,
+  getReportSummary,
+  getStudentsReport,
+  exportAttendanceCsv,
+  getNotifications,
+  getFailedNotifications,
+  // Temporarily disabled with admin overtime follow-up alerts.
+  // getNeedsActionNotifications,
+  getUnreadNotificationCount,
+  markAllNotificationsRead,
+  markNotificationRead,
+  // markNotificationContacted,
+} from '../controllers/adminController';
+
+const router = Router();
+
+// All admin routes require admin role
+router.use(authenticate, requireAdmin);
+
+// Telegram
+router.post('/telegram/link', asyncHandler(createAdminTelegramLink));
+router.get('/telegram/status', asyncHandler(getAdminTelegramStatus));
+router.delete('/telegram', asyncHandler(deleteAdminTelegramLink));
+router.delete('/telegram/link', asyncHandler(deleteAdminTelegramLink));
+router.post('/telegram/test', asyncHandler(testAdminTelegram));
+
+// Seats
+router.get('/seats/live', asyncHandler(getLiveSeats));
+
+// Students
+router.post('/students', asyncHandler(createStudent));
+router.get('/students', asyncHandler(getStudents));
+router.get('/students/:id/available-seats', asyncHandler(getAssignableStudentSeats));
+router.get('/students/:id', asyncHandler(getStudentById));
+router.patch('/students/:id', asyncHandler(editStudent));
+router.patch('/students/:id/status', asyncHandler(updateStudentStatus));
+router.post('/students/:id/reset-pin', asyncHandler(resetStudentPin));
+router.delete('/students/:id', asyncHandler(deleteStudent));
+router.get('/students/:id/attendance', asyncHandler(getStudentAttendance));
+
+// Sessions
+router.get('/sessions', asyncHandler(getSessions));
+router.post('/sessions/:id/force-checkout', asyncHandler(forceCheckout));
+
+// Fees
+router.get('/fees', asyncHandler(getFees));
+router.patch('/fees/:id/pay', asyncHandler(markFeePaid));
+router.post('/fees/generate', asyncHandler(generateFeesManual));
+
+// Reports
+router.get('/reports/summary', asyncHandler(getReportSummary));
+router.get('/reports/students', asyncHandler(getStudentsReport));
+router.get('/export/attendance.csv', asyncHandler(exportAttendanceCsv));
+
+// Notifications
+router.get('/notifications', asyncHandler(getNotifications));
+router.get('/notifications/failed', asyncHandler(getFailedNotifications));
+router.get('/notifications/manual', asyncHandler(getManualNotifications));
+router.patch('/notifications/:id/mark-sent', asyncHandler(markManualNotificationSent));
+// Temporarily disabled with admin overtime follow-up alerts.
+// router.get('/notifications/needs-action', asyncHandler(getNeedsActionNotifications));
+router.get('/notifications/unread-count', asyncHandler(getUnreadNotificationCount));
+router.post('/notifications/read-all', asyncHandler(markAllNotificationsRead));
+// router.patch('/notifications/:id/contacted', asyncHandler(markNotificationContacted));
+router.patch('/notifications/:id/read', asyncHandler(markNotificationRead));
+
+export default router;
