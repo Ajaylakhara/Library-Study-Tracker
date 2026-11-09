@@ -237,6 +237,28 @@ describe('student seat release', () => {
     expect(liveSeats.body.data.find((seat: { seatNumber: number }) => seat.seatNumber === seatNumber).isOccupied).toBe(false);
   });
 
+  it('returns live seats even when an active session references a missing seat record', async () => {
+    const { student } = await createStudent();
+    const orphanedSession = await Session.create({
+      student: student._id,
+      seat: new mongoose.Types.ObjectId(),
+      shiftHours: 4,
+      checkInAt: new Date(),
+      shiftEndsAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
+      status: 'active',
+    });
+    sessionIds.push(orphanedSession._id);
+
+    const response = await request(app)
+      .get('/api/admin/seats/live')
+      .set('Cookie', adminCookie);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ seatNumber: expect.any(Number), isActive: expect.any(Boolean) }),
+    ]));
+  });
+
   it('leaves an admin-disabled seat disabled after deleting its student', async () => {
     const { student, seatNumber } = await createStudent();
     const seat = await Seat.findOne({ number: seatNumber });

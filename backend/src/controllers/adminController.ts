@@ -44,17 +44,21 @@ export const getLiveSeats = async (req: AuthRequest, res: Response, next: NextFu
       .populate('student', 'name phone')
       .populate('seat', 'number');
 
-    const activeMap = new Map(
-      activeSessions.map((s) => [
-        (s.seat as unknown as { _id: string; number: number })._id.toString(),
-        s,
-      ])
-    );
+    const activeMap = new Map<string, (typeof activeSessions)[number]>();
+    for (const session of activeSessions) {
+      const seat = session.seat as unknown as { _id: mongoose.Types.ObjectId } | null;
+      if (seat?._id) activeMap.set(seat._id.toString(), session);
+    }
 
     const allSeats = await Seat.find().sort({ number: 1 });
 
     const data = allSeats.map((seat) => {
       const session = activeMap.get(seat._id.toString());
+      const student = session?.student as unknown as {
+        _id?: mongoose.Types.ObjectId;
+        name?: string;
+        phone?: string;
+      } | null;
       return {
         seatId: seat._id,
         seatNumber: seat.number,
@@ -63,7 +67,11 @@ export const getLiveSeats = async (req: AuthRequest, res: Response, next: NextFu
         session: session
           ? {
               sessionId: session._id,
-              student: (session.student as unknown as { name: string; phone: string }),
+              student: {
+                _id: student?._id?.toString() ?? '',
+                name: student?.name ?? 'Former student',
+                phone: student?.phone ?? '',
+              },
               shiftHours: session.shiftHours,
               checkInAt: session.checkInAt,
               shiftEndsAt: session.shiftEndsAt,
