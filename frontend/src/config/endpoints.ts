@@ -28,6 +28,7 @@ export const ENDPOINTS = {
     studentById: (id: string) => `/admin/students/${id}`,
     availableStudentSeats: (id: string) => `/admin/students/${id}/available-seats`,
     updateStudentStatus: (id: string) => `/admin/students/${id}/status`,
+    restoreStudent: (id: string) => `/admin/students/${id}/restore`,
     resetStudentPin: (id: string) => `/admin/students/${id}/reset-pin`,
     studentAttendance: (id: string) => `/admin/students/${id}/attendance`,
     sessions: '/admin/sessions',

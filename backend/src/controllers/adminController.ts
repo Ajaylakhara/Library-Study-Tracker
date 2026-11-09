@@ -17,6 +17,7 @@ import { generateMonthlyFees } from '../jobs/monthlyFees';
 import { buildCsv } from '../utils/csv';
 import { resolveOvertimeAlerts } from '../services/notifications/overtimeActions';
 import { performForceCheckout } from '../services/notifications/adminBotHandlers';
+import { releaseStudentSeat } from '../services/students/releaseStudentSeat';
 import {
   diffMinutes,
   formatDuration,
@@ -137,10 +138,13 @@ export const createStudent = async (req: AuthRequest, res: Response, next: NextF
 export const getStudents = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { page, limit, skip } = parsePagination(req.query as Record<string, unknown>);
-    const { status, search } = req.query as Record<string, string>;
+    const { status, search, includeDeleted } = req.query as Record<string, string>;
 
-    const filter: Record<string, unknown> = { role: 'student', isDeleted: false };
-    if (status) filter.status = status;
+    const filter: Record<string, unknown> = {
+      role: 'student',
+      isDeleted: includeDeleted === 'true',
+    };
+    if (status && includeDeleted !== 'true') filter.status = status;
     if (search) {
       filter.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -172,7 +176,7 @@ export const getStudentById = async (req: AuthRequest, res: Response, next: Next
 export const getAssignableStudentSeats = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     if (!mongoose.isValidObjectId(req.params.id)) throw createError('Student not found.', 404);
-    const student = await User.findOne({ _id: req.params.id, role: 'student', isDeleted: false }).select('_id');
+    const student = await User.findOne({ _id: req.params.id, role: 'student' }).select('_id');
     if (!student) throw createError('Student not found.', 404);
 
     const seats = await getAssignableSeatNumbers(student._id);
@@ -233,11 +237,40 @@ const updateStatusSchema = z.object({
 export const updateStudentStatus = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { status, monthlyFee } = updateStatusSchema.parse(req.body);
-    const student = await User.findOneAndUpdate(
-      { _id: req.params.id, role: 'student', isDeleted: false },
-      { status, ...(monthlyFee !== undefined && { monthlyFee }) },
-      { new: true }
-    );
+    const existing = await User.findOne({
+      _id: req.params.id,
+      role: 'student',
+      isDeleted: false,
+    });
+    if (!existing) throw createError('Student not found.', 404);
+
+    if (status === 'approved') {
+      if (existing.seatNumber === undefined || existing.shiftHours === undefined) {
+        throw createError('Choose an available seat and shift before approving this student.', 409);
+      }
+      await assertSeatAssignable(existing.seatNumber, existing._id);
+    }
+
+    const releaseSeat =
+      status === 'blocked' ||
+      status === 'rejected' ||
+      (status === 'pending' && existing.status === 'approved');
+    let student;
+    if (releaseSeat) {
+      await releaseStudentSeat(existing._id, {
+        stateUpdate: {
+          status,
+          ...(monthlyFee !== undefined && { monthlyFee }),
+        },
+      });
+      student = await User.findById(existing._id);
+    } else {
+      student = await User.findOneAndUpdate(
+          { _id: req.params.id, role: 'student', isDeleted: false },
+          { status, ...(monthlyFee !== undefined && { monthlyFee }) },
+          { new: true }
+        );
+    }
     if (!student) throw createError('Student not found.', 404);
 
     // Notify student on approval/rejection
@@ -293,24 +326,63 @@ export const deleteStudent = async (req: AuthRequest, res: Response, next: NextF
       throw createError('Student is already deleted.', 400);
     }
 
-    // Check for active sessions
-    const activeSession = await Session.findOne({ student: id, status: 'active' });
-    if (activeSession) {
-      throw createError('Cannot delete student with an active session. Please force check-out first.', 409);
-    }
-
-    // Soft delete: set isDeleted: true, deletedAt: new Date(), status: 'rejected'
-    targetUser.isDeleted = true;
-    targetUser.deletedAt = new Date();
-    targetUser.status = 'rejected';
-    await targetUser.save();
-
-    // Cancel/delete queued notifications for this student
-    await Notification.deleteMany({ user: id, status: 'queued' });
+    await releaseStudentSeat(targetUser._id, {
+      stateUpdate: {
+        isDeleted: true,
+        deletedAt: new Date(),
+        status: 'rejected',
+      },
+    });
 
     res.json({
       success: true,
       message: 'Student deleted successfully.',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const restoreStudentSchema = z.object({
+  seatNumber: z.number().int().min(1).max(70),
+  shiftHours: z.union([z.literal(4), z.literal(12), z.literal(24)]),
+});
+
+export const restoreStudent = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) throw createError('Student not found.', 404);
+    const { seatNumber, shiftHours } = restoreStudentSchema.parse(req.body);
+    const deletedStudent = await User.findOne({
+      _id: req.params.id,
+      role: 'student',
+      isDeleted: true,
+    });
+    if (!deletedStudent) throw createError('Deleted student not found.', 404);
+
+    await assertSeatAssignable(seatNumber, deletedStudent._id);
+    const student = await User.findOneAndUpdate(
+      { _id: deletedStudent._id, role: 'student', isDeleted: true },
+      {
+        $set: {
+          isDeleted: false,
+          deletedAt: null,
+          status: 'pending',
+          seatNumber,
+          shiftHours,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!student) throw createError('Student could not be restored. Reload and try again.', 409);
+
+    res.json({
+      success: true,
+      message: 'Student restored as pending. Review and approve the student to reactivate access.',
+      data: student,
     });
   } catch (err) {
     next(err);

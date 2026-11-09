@@ -42,11 +42,14 @@ interface SharePin {
   pin: string;
 }
 
-const TABS: { key: UserStatus; label: string }[] = [
+type StudentTab = UserStatus | 'deleted';
+
+const TABS: { key: StudentTab; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
   { key: 'blocked', label: 'Blocked' },
+  { key: 'deleted', label: 'Deleted' },
 ];
 const PAGE_SIZE = 10;
 
@@ -56,12 +59,13 @@ type Dialog =
   | { kind: 'pin'; s: Student }
   | { kind: 'status'; s: Student; to: UserStatus; title: string; text: string; label: string }
   | { kind: 'delete'; s: Student }
+  | { kind: 'restore'; s: Student }
   | null;
 
 export function Component() {
   const dispatch = useAppDispatch();
   const refreshBadges = useRefreshBadges();
-  const [tab, setTab] = useState<UserStatus>('pending');
+  const [tab, setTab] = useState<StudentTab>('pending');
   const [search, setSearch] = useState('');
   const q = useDebounce(search.trim(), 400);
   const [page, setPage] = useState(1);
@@ -73,16 +77,26 @@ export function Component() {
   useEffect(() => setPage(1), [tab, q]);
 
   const list = useAsync(async () => {
-    const r = await get<Student[]>(ENDPOINTS.admin.students, { status: tab, search: q, page, limit: PAGE_SIZE });
+    const r = await get<Student[]>(ENDPOINTS.admin.students, {
+      ...(tab === 'deleted' ? { includeDeleted: 'true' } : { status: tab }),
+      search: q,
+      page,
+      limit: PAGE_SIZE,
+    });
     return { rows: r.data, pagination: r.pagination as P };
   }, [tab, q, page]);
 
   const counts = useAsync(async () => {
-    const all = await Promise.all(TABS.map((t) => get<Student[]>(ENDPOINTS.admin.students, { status: t.key, limit: 1 })));
-    return Object.fromEntries(TABS.map((t, i) => [t.key, all[i].pagination?.total ?? 0])) as Record<UserStatus, number>;
+    const all = await Promise.all(TABS.map((t) => get<Student[]>(ENDPOINTS.admin.students, {
+      ...(t.key === 'deleted' ? { includeDeleted: 'true' } : { status: t.key }),
+      limit: 1,
+    })));
+    return Object.fromEntries(TABS.map((t, i) => [t.key, all[i].pagination?.total ?? 0])) as Record<StudentTab, number>;
   }, []);
 
-  const total = counts.data ? Object.values(counts.data).reduce((a, b) => a + b, 0) : null;
+  const total = counts.data
+    ? TABS.filter((item) => item.key !== 'deleted').reduce((sum, item) => sum + counts.data![item.key], 0)
+    : null;
   useAdminHeader('Students', total == null ? undefined : `${total} registered · ${counts.data?.approved ?? 0} approved`);
 
   const changed = () => {
@@ -118,8 +132,16 @@ export function Component() {
         <div className="flex flex-col gap-0.5">
           <span className="font-semibold">{s.name}</span>
           <span className="text-xs font-normal text-muted">
-            {s.status === 'pending' ? 'Registered' : s.status === 'approved' ? 'Since' : s.status === 'rejected' ? 'Rejected' : 'Blocked'}{' '}
-            {dateLabel(s.status === 'pending' || s.status === 'approved' ? s.createdAt : s.updatedAt)}
+            {s.isDeleted
+              ? 'Deleted'
+              : s.status === 'pending'
+                ? 'Registered'
+                : s.status === 'approved'
+                  ? 'Since'
+                  : s.status === 'rejected'
+                    ? 'Rejected'
+                    : 'Blocked'}{' '}
+            {dateLabel(s.isDeleted ? s.deletedAt ?? s.updatedAt : s.status === 'pending' || s.status === 'approved' ? s.createdAt : s.updatedAt)}
           </span>
         </div>
       ),
@@ -131,7 +153,13 @@ export function Component() {
       align: 'right',
       render: (s) => <span className="tnum">{s.monthlyFee ? formatRupees(s.monthlyFee) : '—'}</span>,
     },
-    { key: 'status', header: 'Status', render: (s) => <StatusBadge status={s.status} /> },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (s) => s.isDeleted
+        ? <span className="rounded-full bg-[#efe8da] px-2.5 py-1 text-xs font-semibold text-muted">Deleted</span>
+        : <StatusBadge status={s.status} />,
+    },
     {
       key: 'actions',
       header: 'Actions',
@@ -139,12 +167,17 @@ export function Component() {
       mobileHideLabel: true,
       render: (s) => (
         <div className="flex flex-wrap justify-end gap-2">
-          {(s.status === 'pending' || s.status === 'rejected') && (
+          {s.isDeleted && (
+            <Button size="sm" onClick={() => setDialog({ kind: 'restore', s })}>
+              Restore
+            </Button>
+          )}
+          {!s.isDeleted && (s.status === 'pending' || s.status === 'rejected') && (
             <Button size="sm" onClick={() => setDialog({ kind: 'approve', s })}>
               Approve
             </Button>
           )}
-          {s.status === 'pending' && (
+          {!s.isDeleted && s.status === 'pending' && (
             <Button
               size="sm"
               variant="secondary"
@@ -162,17 +195,20 @@ export function Component() {
               Reject
             </Button>
           )}
-          {(s.status === 'approved' || s.status === 'blocked') && (
+          {(s.status === 'approved' || s.status === 'blocked' || s.status === 'rejected' ||
+            (s.status === 'pending' && (s.seatNumber === undefined || s.shiftHours === undefined))) && !s.isDeleted && (
             <>
               <Button size="sm" variant="ghost" onClick={() => setDialog({ kind: 'edit', s })}>
                 Edit
               </Button>
+              {(s.status === 'approved' || s.status === 'blocked') && (
               <Button size="sm" variant="ghost" onClick={() => setDialog({ kind: 'pin', s })}>
                 Reset PIN
               </Button>
+              )}
             </>
           )}
-          {s.status === 'approved' && (
+          {!s.isDeleted && s.status === 'approved' && (
             <Button
               size="sm"
               variant="secondary"
@@ -190,7 +226,7 @@ export function Component() {
               Block
             </Button>
           )}
-          {s.status === 'blocked' && (
+          {!s.isDeleted && s.status === 'blocked' && (
             <Button
               size="sm"
               variant="secondary"
@@ -208,13 +244,15 @@ export function Component() {
               Unblock
             </Button>
           )}
-          <Button
-            size="sm"
-            variant="dangerOutline"
-            onClick={() => setDialog({ kind: 'delete', s })}
-          >
-            Delete
-          </Button>
+          {!s.isDeleted && (
+            <Button
+              size="sm"
+              variant="dangerOutline"
+              onClick={() => setDialog({ kind: 'delete', s })}
+            >
+              Delete
+            </Button>
+          )}
         </div>
       ),
     },
@@ -351,6 +389,19 @@ function StudentDialogs({
           return run(() => patch(ENDPOINTS.admin.updateStudentStatus(s._id), { status: 'approved', monthlyFee: fee }), 'Student approved');
         }}
       />
+      <RestoreStudentModal
+        open={dialog?.kind === 'restore'}
+        student={dialog?.kind === 'restore' ? dialog.s : null}
+        busy={busy}
+        onClose={onClose}
+        onSubmit={(assignment) => {
+          const s = (dialog as { s: Student }).s;
+          return run(
+            () => patch(ENDPOINTS.admin.restoreStudent(s._id), assignment),
+            'Student restored as pending'
+          );
+        }}
+      />
       <EditModal
         open={dialog?.kind === 'edit'}
         student={dialog?.kind === 'edit' ? dialog.s : null}
@@ -466,6 +517,113 @@ function ApproveModal({
           data-autofocus
         />
       </form>
+    </Modal>
+  );
+}
+
+function RestoreStudentModal({
+  open,
+  student,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean;
+  student: Student | null;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (assignment: { seatNumber: number; shiftHours: ShiftHours }) => void;
+}) {
+  const [seatNumber, setSeatNumber] = useState<number | ''>('');
+  const [shiftHours, setShiftHours] = useState<ShiftHours>(4);
+  const [seats, setSeats] = useState<number[]>([]);
+  const [loadingSeats, setLoadingSeats] = useState(false);
+  const [seatError, setSeatError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    if (!open || !student) return;
+    let active = true;
+    setSeatNumber('');
+    setShiftHours(4);
+    setLoadingSeats(true);
+    setSeatError(null);
+    get<number[]>(ENDPOINTS.admin.availableStudentSeats(student._id))
+      .then((response) => {
+        if (active) setSeats(response.data);
+      })
+      .catch((error: unknown) => {
+        if (active) setSeatError(errMsg(error));
+      })
+      .finally(() => {
+        if (active) setLoadingSeats(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, student, retry]);
+
+  const submit = () => {
+    if (seatNumber === '') return;
+    onSubmit({ seatNumber, shiftHours });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      locked={busy}
+      kicker="Restore student"
+      title={student?.name ?? ''}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={submit} loading={busy} disabled={seatNumber === '' || loadingSeats || !!seatError}>
+            Restore as pending
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-muted">
+          Choose a currently available seat and shift. The student will return as pending for admin approval.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-ink">
+            Assigned seat
+            <select
+              value={seatNumber}
+              onChange={(event) => setSeatNumber(event.target.value ? Number(event.target.value) : '')}
+              disabled={loadingSeats || !!seatError || seats.length === 0}
+              className="h-11 rounded-xl border border-line-strong bg-white px-3 text-sm text-ink disabled:opacity-60"
+            >
+              <option value="">{loadingSeats ? 'Loading seats…' : 'Select a seat'}</option>
+              {seats.map((number) => <option key={number} value={number}>Seat {number}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-ink">
+            Study shift
+            <select
+              value={shiftHours}
+              onChange={(event) => setShiftHours(Number(event.target.value) as ShiftHours)}
+              className="h-11 rounded-xl border border-line-strong bg-white px-3 text-sm text-ink"
+            >
+              <option value={4}>4 hours</option>
+              <option value={12}>12 hours</option>
+              <option value={24}>24 hours</option>
+            </select>
+          </label>
+        </div>
+        {seatError && (
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+            <span>{seatError}</span>
+            <Button size="sm" variant="secondary" onClick={() => setRetry((value) => value + 1)}>Retry</Button>
+          </div>
+        )}
+        {!loadingSeats && !seatError && seats.length === 0 && (
+          <p className="text-sm text-muted">No seats are currently available.</p>
+        )}
+      </div>
     </Modal>
   );
 }

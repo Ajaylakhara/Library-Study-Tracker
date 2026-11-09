@@ -404,13 +404,18 @@ export interface ForceCheckoutResult {
  * Uses atomic findOneAndUpdate with status: 'active'.
  */
 export async function performForceCheckout(
-  sessionId: string | mongoose.Types.ObjectId
+  sessionId: string | mongoose.Types.ObjectId,
+  options: { session?: mongoose.ClientSession; resolveAlerts?: boolean } = {}
 ): Promise<ForceCheckoutResult> {
   const now = new Date();
 
-  const session = await Session.findOne({ _id: sessionId, status: 'active' });
+  let activeQuery = Session.findOne({ _id: sessionId, status: 'active' });
+  if (options.session) activeQuery = activeQuery.session(options.session);
+  const session = await activeQuery;
   if (!session) {
-    const existing = await Session.findById(sessionId);
+    let existingQuery = Session.findById(sessionId);
+    if (options.session) existingQuery = existingQuery.session(options.session);
+    const existing = await existingQuery;
     if (!existing) {
       return { session: null, durationMinutes: 0, durationFormatted: '', alreadyCheckedOut: false };
     }
@@ -435,20 +440,23 @@ export async function performForceCheckout(
         durationMinutes,
       },
     },
-    { new: true }
+    { new: true, ...(options.session && { session: options.session }) }
   );
 
   if (!updated) {
+    let currentQuery = Session.findById(sessionId);
+    if (options.session) currentQuery = currentQuery.session(options.session);
+    const current = await currentQuery;
     return {
-      session,
-      durationMinutes,
-      durationFormatted: formatDuration(durationMinutes),
+      session: current ?? session,
+      durationMinutes: current?.durationMinutes ?? durationMinutes,
+      durationFormatted: formatDuration(current?.durationMinutes ?? durationMinutes),
       alreadyCheckedOut: true,
     };
   }
 
   // Free seat and resolve any overtime alerts
-  await resolveOvertimeAlerts(updated._id);
+  if (options.resolveAlerts !== false) await resolveOvertimeAlerts(updated._id);
 
   return {
     session: updated,

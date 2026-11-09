@@ -21,6 +21,7 @@ import {
   updateStudentStatus,
   resetStudentPin,
   deleteStudent,
+  restoreStudent,
   getStudentAttendance,
   getSessions,
   forceCheckout,
@@ -62,6 +63,7 @@ router.get('/students/:id/available-seats', asyncHandler(getAssignableStudentSea
 router.get('/students/:id', asyncHandler(getStudentById));
 router.patch('/students/:id', asyncHandler(editStudent));
 router.patch('/students/:id/status', asyncHandler(updateStudentStatus));
+router.patch('/students/:id/restore', asyncHandler(restoreStudent));
 router.post('/students/:id/reset-pin', asyncHandler(resetStudentPin));
 router.delete('/students/:id', asyncHandler(deleteStudent));
 router.get('/students/:id/attendance', asyncHandler(getStudentAttendance));
