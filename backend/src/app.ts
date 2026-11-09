@@ -3,6 +3,8 @@ import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { config } from './config';
+import mongoose from 'mongoose';
+import { connectDB, getDatabaseFailureReason } from './db/connectDB';
 import { errorHandler } from './middleware/errorHandler';
 import authRoutes from './routes/authRoutes';
 import studentRoutes from './routes/studentRoutes';
@@ -57,8 +59,25 @@ app.get('/health', (_req, res) => {
   });
 });
 
+app.get('/health/db', async (_req, res) => {
+  try {
+    await connectDB();
+    const database = mongoose.connection.db;
+    if (!database) throw new Error('MongoDB connection is not ready.');
+    await database.admin().ping();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(503).json({
+      success: false,
+      reason: getDatabaseFailureReason(error),
+    });
+  }
+});
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
+app.use('/api', (_req, _res, next) => {
+  connectDB().then(() => next(), next);
+});
 app.use('/api/auth', authRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/me', studentRoutes);

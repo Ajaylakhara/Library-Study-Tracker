@@ -2,6 +2,7 @@ import dns from 'dns';
 import mongoose from 'mongoose';
 import app from './app';
 import { config, getMongoHost, checkUnencodedPassword } from './config';
+import { connectDB, getDatabaseFailureReason } from './db/connectDB';
 import { startJobs } from './jobs';
 
 // Ensure SRV records for mongodb+srv resolve even on restrictive ISP DNS
@@ -18,10 +19,7 @@ async function bootstrap(): Promise<void> {
   }
 
   try {
-    await mongoose.connect(config.mongoUri, {
-      serverSelectionTimeoutMS: 10000,
-    });
-    console.log(`[DB] Connected to MongoDB host: ${host}`);
+    await connectDB();
 
     // Ensure all indexes are created
     await mongoose.connection.syncIndexes();
@@ -50,26 +48,27 @@ async function bootstrap(): Promise<void> {
     console.error('[Server] Bootstrap failed: Could not connect to MongoDB');
     console.error(`[Server] Target Host: ${host}`);
 
-    const error = err as { name?: string; message?: string; code?: number };
-    const errMsg = error.message || String(err);
-    const errCode = error.code;
-
-    if (errCode === 8000 || /bad auth|authentication failed/i.test(errMsg)) {
+    const reason = getDatabaseFailureReason(err);
+    if (reason === 'auth') {
       console.error('[Reason] Authentication failure (code 8000 / bad auth).');
       console.error('[Action] 1. Verify your database username in Atlas (Database Access).');
       console.error('[Action] 2. Reset password to alphanumeric only (or URL-encode special characters).');
-    } else if (/querySrv|ECONNREFUSED|ENOTFOUND/i.test(errMsg)) {
-      console.error('[Reason] DNS SRV query failure.');
-      console.error('[Action] Your network blocked SRV records. Google DNS (8.8.8.8) is configured, or use the standard non-SRV connection string.');
-    } else if (/ReplicaSetNoPrimary|server selection timed out|Could not connect to any servers/i.test(errMsg)) {
-      console.error('[Reason] Cluster unreachable / Server selection timed out.');
-      console.error('[Action] Whitelist your IP in MongoDB Atlas (Network Access -> Allow Access from Anywhere: 0.0.0.0/0).');
+    } else if (reason === 'network') {
+      console.error('[Reason] Network failure / server selection timed out.');
+      console.error('[Action] Check MongoDB Atlas network access and DNS connectivity.');
+    } else if (reason === 'uri') {
+      console.error('[Reason] Invalid MongoDB connection URI.');
     } else {
-      console.error(`[Reason] ${error.name || 'Error'}: ${errMsg}`);
+      const error = err as { name?: string };
+      console.error(`[Reason] ${error.name || 'Error'}`);
     }
     console.error('======================================================\n');
     process.exit(1);
   }
 }
 
-bootstrap();
+if (process.env.VERCEL === undefined) {
+  bootstrap();
+}
+
+export default app;

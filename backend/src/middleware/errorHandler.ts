@@ -51,12 +51,12 @@ export function errorHandler(
 
   const statusCode = err.statusCode ?? 500;
   const message =
-    statusCode === 500 && !isDev ? 'Something went wrong. Please try again.' : err.message;
+    statusCode >= 500 && !isDev ? 'Something went wrong. Please try again.' : err.message;
 
   res.status(statusCode).json({
     success: false,
     message,
-    ...(isDev && statusCode === 500 ? { stack: err.stack } : {}),
+    ...(isDev && statusCode >= 500 ? { stack: err.stack } : {}),
   });
 }
 
