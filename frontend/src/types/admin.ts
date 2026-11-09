@@ -10,6 +10,7 @@ export interface Pagination {
 export interface LiveSeat {
   seatId: string;
   seatNumber: number;
+  isActive: boolean;
   isOccupied: boolean;
   session: {
     sessionId: string;

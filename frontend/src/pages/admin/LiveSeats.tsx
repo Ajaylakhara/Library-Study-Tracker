@@ -12,7 +12,7 @@ import { formatPhone } from '../../helper/formatMinutes';
 import { clock } from '../../helper/date';
 import type { LiveSeat } from '../../types';
 
-type SeatStatus = 'free' | 'occupied' | 'overtime' | 'warning';
+type SeatStatus = 'free' | 'occupied' | 'overtime' | 'warning' | 'inactive';
 
 interface SeatInfo {
   seat: LiveSeat;
@@ -22,7 +22,11 @@ interface SeatInfo {
 }
 
 function getSeatStatus(seat: LiveSeat, now: number): { status: SeatStatus; label: string; remainingMs: number } {
-  if (!seat.session) return { status: 'free', label: 'Free', remainingMs: 0 };
+  if (!seat.session) {
+    return seat.isActive
+      ? { status: 'free', label: 'Free', remainingMs: 0 }
+      : { status: 'inactive', label: 'Inactive', remainingMs: 0 };
+  }
   const remainingMs = new Date(seat.session.shiftEndsAt).getTime() - now;
   const mins = Math.floor(Math.abs(remainingMs) / 60000);
   const hm = `${Math.floor(mins / 60)}h ${mins % 60}m`;
@@ -76,7 +80,7 @@ export function Component() {
 
   const occupiedCount = seatInfos.filter((i) => i.seat.isOccupied).length;
   const overtimeCount = seatInfos.filter((i) => i.status === 'overtime').length;
-  const freeCount = TOTAL_SEATS - occupiedCount;
+  const freeCount = seatInfos.filter((info) => info.seat.isActive && !info.seat.isOccupied).length;
   const occPct = Math.round((occupiedCount / TOTAL_SEATS) * 100);
 
   const selected = seatInfos.find((i) => i.seat.seatNumber === selectedSeatNum) ?? null;
@@ -260,11 +264,14 @@ export function Component() {
                   const isSel = selectedSeatNum === seat.seatNumber;
                   const isFree = status === 'free';
                   const isOt = status === 'overtime';
+                  const isInactive = status === 'inactive';
 
                   const tileBg = isFree
                     ? 'linear-gradient(180deg, #EBF5F1 0%, #D8EDE5 100%)'
                     : isOt
                     ? 'linear-gradient(180deg, #FBF2E3 0%, #F6E4C6 100%)'
+                    : isInactive
+                    ? 'linear-gradient(180deg, #F0F1F3 0%, #DDE1E6 100%)'
                     : 'linear-gradient(180deg, #F9EEEE 0%, #F4DBDA 100%)';
 
                   const tileBd = isSel
@@ -273,9 +280,11 @@ export function Component() {
                     ? '#A7D4C4'
                     : isOt
                     ? '#E7BC70'
+                    : isInactive
+                    ? '#A7AFBA'
                     : '#DDA8A6';
 
-                  const tileFg = isFree ? '#1C6A54' : isOt ? '#7A4C08' : '#8E3232';
+                  const tileFg = isFree ? '#1C6A54' : isOt ? '#7A4C08' : isInactive ? '#5A6A7F' : '#8E3232';
 
                   return (
                     <button
@@ -350,11 +359,29 @@ export function Component() {
                     fontWeight: 600,
                     padding: '4px 10px',
                     borderRadius: '20px',
-                    background: selected.status === 'free' ? 'rgba(63,165,132,0.3)' : selected.status === 'overtime' ? 'rgba(233,169,58,0.3)' : 'rgba(201,123,120,0.3)',
-                    color: selected.status === 'free' ? '#A9E5CF' : selected.status === 'overtime' ? '#FBD58A' : '#FFB8B5',
+                    background: selected.status === 'free'
+                      ? 'rgba(63,165,132,0.3)'
+                      : selected.status === 'overtime'
+                      ? 'rgba(233,169,58,0.3)'
+                      : selected.status === 'inactive'
+                      ? 'rgba(167,175,186,0.3)'
+                      : 'rgba(201,123,120,0.3)',
+                    color: selected.status === 'free'
+                      ? '#A9E5CF'
+                      : selected.status === 'overtime'
+                      ? '#FBD58A'
+                      : selected.status === 'inactive'
+                      ? '#DDE1E6'
+                      : '#FFB8B5',
                   }}
                 >
-                  {selected.status === 'free' ? '○ Free' : selected.status === 'overtime' ? '⚠ Overtime' : '● Occupied'}
+                  {selected.status === 'free'
+                    ? '○ Free'
+                    : selected.status === 'overtime'
+                    ? '⚠ Overtime'
+                    : selected.status === 'inactive'
+                    ? '– Inactive'
+                    : '● Occupied'}
                 </span>
               </div>
 
@@ -421,9 +448,13 @@ export function Component() {
                   </>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', color: '#5A6A7F' }}>
-                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#172B45' }}>Seat is available</div>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#172B45' }}>
+                      {selected.status === 'inactive' ? 'Seat is inactive' : 'Seat is available'}
+                    </div>
                     <div style={{ fontSize: '13px' }}>
-                      No student is currently occupying this seat. It will be assigned when a student checks in.
+                      {selected.status === 'inactive'
+                        ? 'This seat is disabled and unavailable for check-in.'
+                        : 'No student is currently occupying this seat. It will be assigned when a student checks in.'}
                     </div>
                   </div>
                 )}

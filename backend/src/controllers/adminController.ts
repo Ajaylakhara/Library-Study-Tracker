@@ -51,13 +51,14 @@ export const getLiveSeats = async (req: AuthRequest, res: Response, next: NextFu
       ])
     );
 
-    const allSeats = await Seat.find({ isActive: true }).sort({ number: 1 });
+    const allSeats = await Seat.find().sort({ number: 1 });
 
     const data = allSeats.map((seat) => {
       const session = activeMap.get(seat._id.toString());
       return {
         seatId: seat._id,
         seatNumber: seat.number,
+        isActive: seat.isActive,
         isOccupied: !!session,
         session: session
           ? {
