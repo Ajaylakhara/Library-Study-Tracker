@@ -13,6 +13,7 @@ import { NotificationService } from '../src/services/notifications/NotificationS
 import { processQueuedNotifications } from '../src/jobs/notificationWorker';
 import { handleTelegramUpdate } from '../src/services/notifications/telegramUpdates';
 import { sendMessage } from '../src/services/notifications/providers/telegram';
+import * as database from '../src/db/connectDB';
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -328,6 +329,81 @@ describe('Telegram linking', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
+    }
+  });
+
+  it('awaits Vercel database connection and Telegram processing before acknowledging updates', async () => {
+    const originalVercel = process.env.VERCEL;
+    process.env.VERCEL = '1';
+
+    let finishDatabaseConnect!: () => void;
+    let signalDatabaseConnect!: () => void;
+    const databaseConnectStarted = new Promise<void>((resolve) => {
+      signalDatabaseConnect = resolve;
+    });
+    const databaseGate = new Promise<void>((resolve) => {
+      finishDatabaseConnect = resolve;
+    });
+    let databaseReady = false;
+    const connectSpy = jest.spyOn(database, 'connectDB').mockImplementation(async () => {
+      signalDatabaseConnect();
+      await databaseGate;
+      databaseReady = true;
+    });
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      expect(databaseReady).toBe(true);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const loggedErrors: string[] = [];
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      loggedErrors.push(args.join(' '));
+    });
+
+    try {
+      const invalidSecret = await request(app)
+        .post('/api/telegram/webhook')
+        .set('X-Telegram-Bot-Api-Secret-Token', 'invalid')
+        .send({ message: { text: '/myid', chat: { id: 70048, type: 'private' } } });
+      expect(invalidSecret.status).toBe(401);
+      expect(connectSpy).not.toHaveBeenCalled();
+
+      let responseReceived = false;
+      const responsePromise = request(app)
+        .post('/api/telegram/webhook')
+        .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
+        .send({ message: { text: '/myid', chat: { id: 70049, type: 'private' } } })
+        .then((response) => {
+          responseReceived = true;
+          return response;
+        });
+
+      await databaseConnectStarted;
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(responseReceived).toBe(false);
+      finishDatabaseConnect();
+
+      const response = await responsePromise;
+      expect(response.status).toBe(200);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      fetchSpy.mockRejectedValueOnce(new Error('Telegram provider unavailable'));
+      const failedUpdateResponse = await request(app)
+        .post('/api/telegram/webhook')
+        .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
+        .send({ message: { text: '/myid', chat: { id: 70050, type: 'private' } } });
+
+      expect(failedUpdateResponse.status).toBe(200);
+      expect(loggedErrors.join(' ')).toContain('type=message');
+      expect(loggedErrors.join(' ')).toContain('error=Error');
+    } finally {
+      connectSpy.mockRestore();
+      fetchSpy.mockRestore();
+      errorSpy.mockRestore();
+      if (originalVercel === undefined) delete process.env.VERCEL;
+      else process.env.VERCEL = originalVercel;
     }
   });
 

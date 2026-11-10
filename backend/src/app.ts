@@ -75,7 +75,16 @@ app.get('/health/db', async (_req, res) => {
 });
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
-app.use('/api', (_req, _res, next) => {
+app.use('/api', (req, _res, next) => {
+  if (
+    process.env.VERCEL &&
+    req.method === 'POST' &&
+    req.path === '/telegram/webhook'
+  ) {
+    next();
+    return;
+  }
+
   connectDB().then(() => next(), next);
 });
 app.use('/api/auth', authRoutes);
