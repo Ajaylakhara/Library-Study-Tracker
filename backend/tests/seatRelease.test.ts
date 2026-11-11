@@ -7,7 +7,7 @@ import app from '../src/app';
 import { config } from '../src/config';
 import { Fee } from '../src/models/Fee';
 import { Notification } from '../src/models/Notification';
-import { Seat } from '../src/models/Seat';
+import { ensureSeats, Seat, TOTAL_SEATS } from '../src/models/Seat';
 import { Session } from '../src/models/Session';
 import { User } from '../src/models/User';
 import { releaseStudentSeat } from '../src/services/students/releaseStudentSeat';
@@ -114,6 +114,94 @@ describe('student seat release', () => {
     globalThis.mongooseConnectionPromise = undefined;
   });
 
+  it('returns all 70 missing seats as free without a configured status', async () => {
+    const existingSeats = await Seat.find().lean();
+    try {
+      await Seat.deleteMany({});
+      const response = await request(app)
+        .get('/api/admin/seats/live')
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toHaveLength(TOTAL_SEATS);
+      expect(response.body.data).toEqual(
+        Array.from({ length: TOTAL_SEATS }, (_, index) => expect.objectContaining({
+          seatNumber: index + 1,
+          isActive: true,
+          isOccupied: false,
+          status: 'free',
+        }))
+      );
+      expect(JSON.stringify(response.body)).not.toMatch(/not.?configured/i);
+    } finally {
+      await Seat.insertMany(existingSeats);
+    }
+  });
+
+  it('ensures all seats exist without changing an existing active setting', async () => {
+    const seat = await Seat.findOne({ number: 1 });
+    if (!seat) throw new Error('Test seat 1 was not seeded.');
+    try {
+      await Seat.updateOne({ _id: seat._id }, { $set: { isActive: false } });
+      await Seat.deleteOne({ number: TOTAL_SEATS });
+
+      await ensureSeats();
+
+      expect(await Seat.countDocuments({ number: { $gte: 1, $lte: TOTAL_SEATS } })).toBe(TOTAL_SEATS);
+      expect((await Seat.findOne({ number: 1 }))?.isActive).toBe(false);
+      expect((await Seat.findOne({ number: TOTAL_SEATS }))?.isActive).toBe(true);
+    } finally {
+      await Seat.updateOne({ number: 1 }, { $set: { isActive: true } });
+    }
+  });
+
+  it('does not reserve blocked or deleted assignments but keeps pending assignments reserved', async () => {
+    const availableSeats = await getAssignableSeatNumbers();
+    const [blockedSeat, deletedSeat, pendingSeat] = availableSeats;
+    if (blockedSeat === undefined || deletedSeat === undefined || pendingSeat === undefined) {
+      throw new Error('Not enough test seats are available.');
+    }
+
+    const pinHash = await bcrypt.hash('654321', 4);
+    const students = await User.create([
+      {
+        name: 'Blocked Seat Reservation Test',
+        phone: await uniquePhone(),
+        pinHash,
+        role: 'student',
+        status: 'blocked',
+        seatNumber: blockedSeat,
+        shiftHours: 4,
+      },
+      {
+        name: 'Deleted Seat Reservation Test',
+        phone: await uniquePhone(),
+        pinHash,
+        role: 'student',
+        status: 'approved',
+        isDeleted: true,
+        deletedAt: new Date(),
+        seatNumber: deletedSeat,
+        shiftHours: 4,
+      },
+      {
+        name: 'Pending Seat Reservation Test',
+        phone: await uniquePhone(),
+        pinHash,
+        role: 'student',
+        status: 'pending',
+        seatNumber: pendingSeat,
+        shiftHours: 4,
+      },
+    ]);
+    userIds.push(...students.map(({ _id }) => _id));
+
+    const assignableSeats = await getAssignableSeatNumbers();
+    expect(assignableSeats).toContain(blockedSeat);
+    expect(assignableSeats).toContain(deletedSeat);
+    expect(assignableSeats).not.toContain(pendingSeat);
+  });
+
   it('makes a deleted student’s seat available again', async () => {
     const { student, seatNumber } = await createStudent();
     const before = await request(app).get('/api/auth/seats/available');
@@ -141,6 +229,43 @@ describe('student seat release', () => {
     expect(response.status).toBe(200);
     expect((await User.findById(student._id))?.seatNumber).toBeUndefined();
     expect(await getAssignableSeatNumbers()).toContain(seatNumber);
+  });
+
+  it('force-checks out and releases a blocked student’s active seat for reassignment', async () => {
+    const { student, seatNumber } = await createStudent();
+    const activeSession = await createSession(student._id, seatNumber);
+
+    const blocked = await request(app)
+      .patch(`/api/admin/students/${student._id}/status`)
+      .set('Cookie', adminCookie)
+      .send({ status: 'blocked' });
+
+    expect(blocked.status).toBe(200);
+    expect((await User.findById(student._id))?.seatNumber).toBeUndefined();
+    expect((await User.findById(student._id))?.shiftHours).toBeUndefined();
+    const completed = await Session.findById(activeSession._id);
+    expect(completed?.status).toBe('completed');
+    expect(completed?.checkoutType).toBe('forced');
+    expect(completed?.checkOutAt).toBeInstanceOf(Date);
+    expect(completed?.durationMinutes).toBeGreaterThan(0);
+
+    const replacement = await request(app)
+      .post('/api/admin/students')
+      .set('Cookie', adminCookie)
+      .send({
+        name: 'Replacement Seat Student',
+        phone: await uniquePhone(),
+        pin: '123456',
+        seatNumber,
+        shiftHours: 4,
+        monthlyFee: 1000,
+        whatsappOptIn: true,
+        smsOptIn: true,
+      });
+
+    expect(replacement.status).toBe(201);
+    expect(replacement.body.data.student.seatNumber).toBe(seatNumber);
+    userIds.push(new mongoose.Types.ObjectId(replacement.body.data.student._id));
   });
 
   it('releases the seat when an admin rejects a student', async () => {

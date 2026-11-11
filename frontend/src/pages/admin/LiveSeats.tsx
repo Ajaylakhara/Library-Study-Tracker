@@ -12,7 +12,7 @@ import { formatPhone } from '../../helper/formatMinutes';
 import { clock } from '../../helper/date';
 import type { LiveSeat } from '../../types';
 
-type SeatStatus = 'free' | 'occupied' | 'overtime' | 'warning' | 'inactive';
+type SeatStatus = 'free' | 'occupied' | 'overtime' | 'inactive';
 
 interface SeatInfo {
   seat: LiveSeat;
@@ -31,7 +31,7 @@ function getSeatStatus(seat: LiveSeat, now: number): { status: SeatStatus; label
   const mins = Math.floor(Math.abs(remainingMs) / 60000);
   const hm = `${Math.floor(mins / 60)}h ${mins % 60}m`;
   if (remainingMs < 0) return { status: 'overtime', label: `+${mins}m`, remainingMs };
-  return { status: remainingMs <= 10 * 60000 ? 'warning' : 'occupied', label: mins >= 60 ? hm : `${mins}m`, remainingMs };
+  return { status: 'occupied', label: mins >= 60 ? hm : `${mins}m`, remainingMs };
 }
 
 export function Component() {
@@ -79,9 +79,11 @@ export function Component() {
   }, [seats, now]);
 
   const occupiedCount = seatInfos.filter((i) => i.seat.isOccupied).length;
+  const activeSeatCount = seatInfos.filter((info) => info.seat.isActive).length;
+  const activeOccupiedCount = seatInfos.filter((info) => info.seat.isActive && info.seat.isOccupied).length;
   const overtimeCount = seatInfos.filter((i) => i.status === 'overtime').length;
   const freeCount = seatInfos.filter((info) => info.seat.isActive && !info.seat.isOccupied).length;
-  const occPct = Math.round((occupiedCount / TOTAL_SEATS) * 100);
+  const occPct = activeSeatCount === 0 ? 0 : Math.round((activeOccupiedCount / activeSeatCount) * 100);
 
   const selected = seatInfos.find((i) => i.seat.seatNumber === selectedSeatNum) ?? null;
 
@@ -288,7 +290,7 @@ export function Component() {
 
                   return (
                     <button
-                      key={seat.seatId}
+                      key={seat.seatNumber}
                       type="button"
                       className="admin-seat-tile"
                       onClick={() => setSelectedSeatNum(seat.seatNumber)}

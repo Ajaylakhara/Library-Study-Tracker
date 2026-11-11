@@ -6,7 +6,7 @@ import { randomInt } from 'crypto';
 import { format, fromZonedTime, toZonedTime } from 'date-fns-tz';
 import { AuthRequest } from '../middleware/auth';
 import { User } from '../models/User';
-import { Seat } from '../models/Seat';
+import { Seat, TOTAL_SEATS } from '../models/Seat';
 import { Session } from '../models/Session';
 import { Fee } from '../models/Fee';
 import { Notification } from '../models/Notification';
@@ -50,20 +50,34 @@ export const getLiveSeats = async (req: AuthRequest, res: Response, next: NextFu
       if (seat?._id) activeMap.set(seat._id.toString(), session);
     }
 
-    const allSeats = await Seat.find().sort({ number: 1 });
+    const allSeats = await Seat.find({ number: { $gte: 1, $lte: TOTAL_SEATS } }).sort({ number: 1 });
+    const seatsByNumber = new Map(allSeats.map((seat) => [seat.number, seat]));
+    const now = Date.now();
 
-    const data = allSeats.map((seat) => {
-      const session = activeMap.get(seat._id.toString());
+    const data = Array.from({ length: TOTAL_SEATS }, (_, index) => {
+      const seatNumber = index + 1;
+      const seat = seatsByNumber.get(seatNumber);
+      const session = seat ? activeMap.get(seat._id.toString()) : undefined;
+      const isActive = seat?.isActive ?? true;
       const student = session?.student as unknown as {
         _id?: mongoose.Types.ObjectId;
         name?: string;
         phone?: string;
       } | null;
+      const status = session
+        ? session.shiftEndsAt.getTime() < now
+          ? 'overtime'
+          : 'occupied'
+        : isActive
+          ? 'free'
+          : 'inactive';
+
       return {
-        seatId: seat._id,
-        seatNumber: seat.number,
-        isActive: seat.isActive,
+        seatId: seat?._id ?? null,
+        seatNumber,
+        isActive,
         isOccupied: !!session,
+        status,
         session: session
           ? {
               sessionId: session._id,
@@ -92,7 +106,7 @@ const createStudentSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters').max(100).trim(),
   phone: z.string().regex(/^\d{10}$/, 'Phone must be a 10-digit Indian mobile number'),
   pin: z.string().regex(/^\d{6}$/, 'PIN must be exactly 6 digits').optional(),
-  seatNumber: z.number().int().min(1).max(70),
+  seatNumber: z.number().int().min(1).max(TOTAL_SEATS),
   shiftHours: z.union([z.literal(4), z.literal(12), z.literal(24)]),
   monthlyFee: z.number().min(0),
   whatsappOptIn: z.boolean(),
@@ -202,7 +216,7 @@ const editStudentSchema = z.object({
     z.string().email('Please enter a valid email address').trim().toLowerCase(),
     z.literal(''),
   ]).optional(),
-  seatNumber: z.number().int().min(1).max(70).optional(),
+  seatNumber: z.number().int().min(1).max(TOTAL_SEATS).optional(),
   shiftHours: z.union([z.literal(4), z.literal(12), z.literal(24)]).optional(),
   monthlyFee: z.number().min(0).optional(),
   whatsappOptIn: z.boolean().optional(),
@@ -353,7 +367,7 @@ export const deleteStudent = async (req: AuthRequest, res: Response, next: NextF
 };
 
 const restoreStudentSchema = z.object({
-  seatNumber: z.number().int().min(1).max(70),
+  seatNumber: z.number().int().min(1).max(TOTAL_SEATS),
   shiftHours: z.union([z.literal(4), z.literal(12), z.literal(24)]),
 });
 

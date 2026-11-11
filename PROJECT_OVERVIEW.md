@@ -11,6 +11,11 @@ For step-by-step local setup and user workflows, see
 [PROJECT_WORKFLOWS.md](./PROJECT_WORKFLOWS.md). For the implementation
 checklist, see [MASTER_PLAN.md](./MASTER_PLAN.md).
 
+## Live application
+
+- **Frontend:** [https://library-study-tracker.vercel.app](https://library-study-tracker.vercel.app)
+- **Backend:** [https://library-study-tracker-z69g.vercel.app/](https://library-study-tracker-z69g.vercel.app/)
+
 ## At a glance
 
 | Area | Current implementation |

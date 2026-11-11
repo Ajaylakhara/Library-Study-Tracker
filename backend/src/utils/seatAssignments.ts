@@ -1,15 +1,16 @@
 import mongoose from 'mongoose';
-import { Seat } from '../models/Seat';
+import { Seat, TOTAL_SEATS } from '../models/Seat';
 import { Session } from '../models/Session';
 import { User } from '../models/User';
 import { createError } from '../middleware/errorHandler';
 
 export async function getAssignableSeatNumbers(exceptStudentId?: mongoose.Types.ObjectId): Promise<number[]> {
   const [seats, assignedSeatNumbers, occupiedSeatIds] = await Promise.all([
-    Seat.find({ isActive: true }).sort({ number: 1 }).select('number').lean(),
+    Seat.find({ number: { $gte: 1, $lte: TOTAL_SEATS } }).select('number isActive').lean(),
     User.distinct('seatNumber', {
       role: 'student',
       isDeleted: false,
+      status: { $in: ['pending', 'approved'] },
       seatNumber: { $exists: true },
       ...(exceptStudentId && { _id: { $ne: exceptStudentId } }),
     }),
@@ -21,7 +22,11 @@ export async function getAssignableSeatNumbers(exceptStudentId?: mongoose.Types.
 
   const occupiedSeatNumbers = await Seat.distinct('number', { _id: { $in: occupiedSeatIds } });
   const unavailable = new Set([...assignedSeatNumbers, ...occupiedSeatNumbers]);
-  return seats.map((seat) => seat.number).filter((number) => !unavailable.has(number));
+  const seatsByNumber = new Map(seats.map((seat) => [seat.number, seat]));
+  return Array.from({ length: TOTAL_SEATS }, (_, index) => index + 1).filter((number) => {
+    const seat = seatsByNumber.get(number);
+    return (seat?.isActive ?? true) && !unavailable.has(number);
+  });
 }
 
 export async function assertSeatAssignable(seatNumber: number, exceptStudentId?: mongoose.Types.ObjectId): Promise<void> {

@@ -1,5 +1,5 @@
 
-export type SeatState = 'free' | 'occupied' | 'taken' | 'warning' | 'overtime' | 'inactive';
+export type SeatState = 'free' | 'occupied' | 'overtime' | 'inactive';
 
 /** Student view: choose a free seat */
 export function StudentSeatTile({
@@ -9,12 +9,12 @@ export function StudentSeatTile({
   onSelect,
 }: {
   n: number;
-  state: 'free' | 'taken';
+  state: 'free' | 'occupied';
   selected: boolean;
   onSelect: (n: number) => void;
 }) {
   const free = state === 'free';
-  const label = `Seat ${n}, ${selected ? 'selected' : free ? 'free' : 'taken'}`;
+  const label = `Seat ${n}, ${selected ? 'selected' : free ? 'free' : 'occupied'}`;
   return (
     <button
       type="button"
@@ -45,10 +45,9 @@ export function StudentSeatTile({
   );
 }
 
-const ADMIN_STYLES: Record<Exclude<SeatState, 'taken'>, { box: string; fg: string; glyph: string }> = {
+const ADMIN_STYLES: Record<SeatState, { box: string; fg: string; glyph: string }> = {
   free: { box: 'border-free bg-paper', fg: 'text-free-fg', glyph: '○' },
   occupied: { box: 'border-[#d9a8a3] bg-[#f8ecea]', fg: 'text-occupied-fg', glyph: '●' },
-  warning: { box: 'border-warn bg-warn-bg', fg: 'text-warn-fg', glyph: '◔' },
   overtime: { box: 'border-warn bg-warn-bg', fg: 'text-warn-fg', glyph: '!' },
   inactive: { box: 'border-dashed border-inactive bg-inactive-bg', fg: 'text-[#77736b]', glyph: '–' },
 };
@@ -63,16 +62,15 @@ export function AdminSeatTile({
   ariaLabel,
 }: {
   n: number;
-  state: Exclude<SeatState, 'taken'>;
+  state: SeatState;
   label: string;
   selected: boolean;
   onSelect: (n: number) => void;
   ariaLabel: string;
 }) {
-  const TINTS: Record<Exclude<SeatState,'taken'>, { bg: string; border: string; fg: string }> = {
+  const TINTS: Record<SeatState, { bg: string; border: string; fg: string }> = {
     free:     { bg: 'rgba(255,255,255,.72)',       border: '#3FA584',              fg: '#1C6A54' },
     occupied: { bg: 'rgba(201,123,120,.16)',       border: 'rgba(201,123,120,.6)', fg: '#8E3232' },
-    warning:  { bg: 'rgba(248,179,69,.18)',        border: '#E2A23B',              fg: '#7A4C08' },
     overtime: { bg: 'rgba(248,179,69,.22)',        border: '#E2A23B',              fg: '#7A4C08' },
     inactive: { bg: 'rgba(167,175,186,.18)',       border: '#A7AFBA',              fg: '#5A6A7F' },
   };

@@ -14,9 +14,9 @@ module.exports = async function globalSetup() {
         updateOne: {
           filter: { number },
           update: {
-            $set: { isActive: true },
             $setOnInsert: {
               number,
+              isActive: true,
               createdAt: new Date(),
               updatedAt: new Date(),
             },

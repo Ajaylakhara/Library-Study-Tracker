@@ -226,8 +226,8 @@ export function Component() {
         </Select>
         <Select label="Seat" value={draft.seatId} onChange={(e) => setDraft({ ...draft, seatId: e.target.value })} className="w-32.5">
           <option value="">All seats</option>
-          {options.data?.seats.map((s) => (
-            <option key={s.seatId} value={s.seatId}>
+          {options.data?.seats.filter((seat) => seat.seatId !== null).map((s) => (
+            <option key={s.seatNumber} value={s.seatId ?? ''}>
               Seat {s.seatNumber}
             </option>
           ))}

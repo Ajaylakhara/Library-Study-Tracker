@@ -8,10 +8,11 @@ export interface Pagination {
 }
 
 export interface LiveSeat {
-  seatId: string;
+  seatId: string | null;
   seatNumber: number;
   isActive: boolean;
   isOccupied: boolean;
+  status: 'occupied' | 'overtime' | 'free' | 'inactive';
   session: {
     sessionId: string;
     student: { _id: string; name: string; phone: string };

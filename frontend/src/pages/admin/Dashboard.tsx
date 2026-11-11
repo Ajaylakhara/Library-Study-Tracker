@@ -43,7 +43,6 @@ const STATUS_COLOR = {
   overtime: '#E2A23B',
   free: '#3FA584',
   inactive: '#A7AFBA',
-  unconfigured: '#D9C6A7',
 };
 
 function getGreeting(hour: number): string {
@@ -53,7 +52,7 @@ function getGreeting(hour: number): string {
 }
 
 function getSeatStatus(seat: LiveSeat | undefined, now: number) {
-  if (!seat) return { label: 'Not configured', color: STATUS_COLOR.unconfigured, mark: '?' };
+  if (!seat) return { label: 'Free', color: STATUS_COLOR.free, mark: '○' };
   if (seat.session && new Date(seat.session.shiftEndsAt).getTime() < now) {
     return { label: 'Overtime', color: STATUS_COLOR.overtime, mark: '!' };
   }
@@ -150,9 +149,16 @@ export function Component() {
 
   usePolling(() => void refresh(), POLL_MS);
 
-  const { seatByNumber, activeCount, overtimeCount, inactiveCount, unconfiguredCount, freeCount, shiftCounts } = useMemo(() => {
+  const { seatByNumber, activeCount, activeSeatCount, overtimeCount, inactiveCount, freeCount, shiftCounts } = useMemo(() => {
     const seatMap = new Map(data?.seats.map((seat) => [seat.seatNumber, seat]) ?? []);
-    const seats = data?.seats ?? [];
+    const seats = Array.from({ length: TOTAL_SEATS }, (_, index) => seatMap.get(index + 1) ?? {
+      seatId: null,
+      seatNumber: index + 1,
+      isActive: true,
+      isOccupied: false,
+      status: 'free' as const,
+      session: null,
+    });
     const active = seats.filter((seat) => seat.isOccupied);
     const overtime = active.filter((seat) => new Date(seat.session!.shiftEndsAt).getTime() < now).length;
     const shifts = new Map<number, number>([[4, 0], [12, 0], [24, 0]]);
@@ -163,15 +169,16 @@ export function Component() {
     return {
       seatByNumber: seatMap,
       activeCount: active.length,
+      activeSeatCount: seats.filter((seat) => seat.isActive).length,
       overtimeCount: overtime,
       inactiveCount: seats.filter((seat) => !seat.isActive && !seat.isOccupied).length,
-      unconfiguredCount: Math.max(0, TOTAL_SEATS - new Set(seats.map((seat) => seat.seatNumber)).size),
       freeCount: seats.filter((seat) => seat.isActive && !seat.isOccupied).length,
       shiftCounts: shifts,
     };
   }, [data?.seats, now]);
 
-  const occupancyPercent = Math.round((activeCount / TOTAL_SEATS) * 100);
+  const activeOccupiedCount = (data?.seats ?? []).filter((seat) => seat.isActive && seat.isOccupied).length;
+  const occupancyPercent = activeSeatCount === 0 ? 0 : Math.round((activeOccupiedCount / activeSeatCount) * 100);
   const todaySummary = data?.report.daily.find((entry) => entry.date === today);
   const attendance = data?.recentSessions ?? [];
   const maxShiftCount = Math.max(1, ...Array.from(shiftCounts.values()));
@@ -180,7 +187,6 @@ export function Component() {
     { color: STATUS_COLOR.overtime, count: overtimeCount },
     { color: STATUS_COLOR.free, count: freeCount },
     { color: STATUS_COLOR.inactive, count: inactiveCount },
-    { color: STATUS_COLOR.unconfigured, count: unconfiguredCount },
   ];
   const donutBackground = useMemo(() => {
     let start = 0;
@@ -191,7 +197,7 @@ export function Component() {
       return stop;
     });
     return `conic-gradient(${stops.join(', ')})`;
-  }, [activeCount, freeCount, inactiveCount, overtimeCount, unconfiguredCount]);
+  }, [activeCount, freeCount, inactiveCount, overtimeCount]);
 
   if (loading && !data) {
     return (
@@ -228,7 +234,6 @@ export function Component() {
             {overtimeCount > 0 && <span style={{ width: `${(overtimeCount / TOTAL_SEATS) * 100}%`, background: STATUS_COLOR.overtime }} />}
             {freeCount > 0 && <span style={{ width: `${(freeCount / TOTAL_SEATS) * 100}%`, background: STATUS_COLOR.free }} />}
             {inactiveCount > 0 && <span style={{ width: `${(inactiveCount / TOTAL_SEATS) * 100}%`, background: STATUS_COLOR.inactive }} />}
-            {unconfiguredCount > 0 && <span style={{ width: `${(unconfiguredCount / TOTAL_SEATS) * 100}%`, background: STATUS_COLOR.unconfigured }} />}
           </div>
           <div className="dashboard-legend">
             {[
@@ -236,7 +241,6 @@ export function Component() {
               ['Overtime', overtimeCount, STATUS_COLOR.overtime],
               ['Free', freeCount, STATUS_COLOR.free],
               ['Inactive', inactiveCount, STATUS_COLOR.inactive],
-              ...(unconfiguredCount > 0 ? [['Not configured', unconfiguredCount, STATUS_COLOR.unconfigured] as [string, number, string]] : []),
             ].map(([label, value, color]) => (
               <span key={String(label)}>
                 <i style={{ background: String(color) }} />
@@ -288,7 +292,6 @@ export function Component() {
                 ['Overtime', overtimeCount, STATUS_COLOR.overtime],
                 ['Free', freeCount, STATUS_COLOR.free],
                 ['Inactive', inactiveCount, STATUS_COLOR.inactive],
-                ...(unconfiguredCount > 0 ? [['Not configured', unconfiguredCount, STATUS_COLOR.unconfigured] as [string, number, string]] : []),
               ].map(([label, value, color]) => (
                 <div key={String(label)}>
                   <i style={{ background: String(color) }} />
@@ -329,7 +332,6 @@ export function Component() {
               ['Overtime', STATUS_COLOR.overtime],
               ['Free', STATUS_COLOR.free],
               ['Inactive', STATUS_COLOR.inactive],
-              ...(unconfiguredCount > 0 ? [['Not configured', STATUS_COLOR.unconfigured] as [string, string]] : []),
             ].map(([label, color]) => <span key={String(label)}><i style={{ background: String(color) }} />{label}</span>)}
           </div>
           <div className="dashboard-seat-grid">

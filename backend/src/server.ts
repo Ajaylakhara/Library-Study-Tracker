@@ -4,6 +4,7 @@ import app from './app';
 import { config, getMongoHost, checkUnencodedPassword } from './config';
 import { connectDB, getDatabaseFailureReason } from './db/connectDB';
 import { startJobs } from './jobs';
+import { ensureSeats } from './models/Seat';
 
 // Ensure SRV records for mongodb+srv resolve even on restrictive ISP DNS
 dns.setServers(['8.8.8.8', '8.8.4.4']);
@@ -23,6 +24,8 @@ async function bootstrap(): Promise<void> {
 
     // Ensure all indexes are created
     await mongoose.connection.syncIndexes();
+
+    await ensureSeats();
 
     // Start background jobs
     startJobs();

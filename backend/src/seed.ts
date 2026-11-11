@@ -5,8 +5,6 @@ import { config, getMongoHost } from './config';
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
-const TOTAL_SEATS = 70;
-
 async function seed(): Promise<void> {
   try {
     if (!/^\d{10}$/.test(config.seed.adminPhone)) {
@@ -21,28 +19,14 @@ async function seed(): Promise<void> {
 
     // Dynamically import models
     const { User } = await import('./models/User');
-    const { Seat } = await import('./models/Seat');
+    const { ensureSeats, TOTAL_SEATS } = await import('./models/Seat');
 
     await mongoose.connection.syncIndexes();
 
     // ─── 1. Seed Seats (1 to 70) ─────────────────────────────────────────────
-    console.log(`[Seed] Creating ${TOTAL_SEATS} seats...`);
-    let seatsCreated = 0;
-    let seatsSkipped = 0;
-
-    for (let i = 1; i <= TOTAL_SEATS; i++) {
-      try {
-        await Seat.create({ number: i, isActive: true });
-        seatsCreated++;
-      } catch (err: unknown) {
-        if ((err as { code?: number }).code === 11000) {
-          seatsSkipped++;
-        } else {
-          throw err;
-        }
-      }
-    }
-    console.log(`[Seed] Seats: created=${seatsCreated}, skipped=${seatsSkipped}`);
+    console.log(`[Seed] Ensuring seats 1-${TOTAL_SEATS} exist...`);
+    await ensureSeats();
+    console.log('[Seed] Seats ensured; existing active settings were preserved.');
 
     // ─── 2. Seed Admin ────────────────────────────────────────────────────────
     const adminPhone = config.seed.adminPhone;
