@@ -17,7 +17,7 @@
 import mongoose from 'mongoose';
 import { format } from 'date-fns-tz';
 import { User, IUser } from '../../models/User';
-import { Seat, TOTAL_SEATS } from '../../models/Seat';
+import { TOTAL_SEATS } from '../../models/Seat';
 import { Session } from '../../models/Session';
 import { Notification, INotification } from '../../models/Notification';
 import { Fee } from '../../models/Fee';
@@ -38,10 +38,36 @@ import {
 } from './providers/telegram';
 
 export const ADMIN_KEYBOARD_ROWS = [
-  ['👥 Live now', '📝 Pending requests'],
-  ['💰 Unpaid fees', '⏱ Overtime'],
+  ['👥 Live seats', '⏱ Overtime'],
+  ['📝 Pending requests', '💰 Unpaid fees'],
 ];
 export const ADMIN_REFUSAL_MESSAGE = '⛔ This bot is only accessible to authorized administrators.';
+
+export function homeKeyboard(): TelegramInlineKeyboard {
+  return [[{ text: '🏠 Menu', callback_data: callbackData('menu', '0') }]];
+}
+
+export function menuInlineKeyboard(): TelegramInlineKeyboard {
+  return [
+    [
+      { text: '👥 Live seats', callback_data: callbackData('menu_live', '0') },
+      { text: '⏱ Overtime', callback_data: callbackData('menu_overtime', '0') },
+    ],
+    [
+      { text: '📝 Pending requests', callback_data: callbackData('menu_pending', '0') },
+      { text: '💰 Unpaid fees', callback_data: callbackData('menu_unpaid', '0') },
+    ],
+  ];
+}
+
+function withHomeButton(keyboard?: TelegramInlineKeyboard): TelegramInlineKeyboard {
+  const rows: TelegramInlineButton[][] = !keyboard || keyboard.length === 0
+    ? []
+    : Array.isArray(keyboard[0])
+      ? keyboard as TelegramInlineButton[][]
+      : (keyboard as TelegramInlineButton[]).map((button) => [button]);
+  return [...rows, ...homeKeyboard() as TelegramInlineButton[][]];
+}
 
 export function callbackData(action: string, id: string): string {
   const data = `${action}:${id}`;
@@ -111,7 +137,8 @@ export async function requireLinkedAdmin(
  */
 export async function handleHelp(
   chatId: string,
-  sendReply: typeof sendReplyKeyboard = sendReplyKeyboard
+  sendReply: typeof sendReplyKeyboard = sendReplyKeyboard,
+  sendMsg: typeof sendMessageHtml = sendMessageHtml
 ): Promise<void> {
   const text =
     '📚 <b>Library Admin Bot Help</b>\n\n' +
@@ -126,13 +153,16 @@ export async function handleHelp(
     '<i>Tap the buttons below for quick access.</i>';
 
   await sendReply(chatId, text, ADMIN_KEYBOARD_ROWS, 'HTML');
+  await sendMsg(chatId, 'Open the admin menu:', menuInlineKeyboard());
 }
 
 export async function handleAdminMenu(
   chatId: string,
+  sendMsg: typeof sendMessageHtml = sendMessageHtml,
   sendReply: typeof sendReplyKeyboard = sendReplyKeyboard
 ): Promise<void> {
-  await sendReply(chatId, 'Library admin control panel:', ADMIN_KEYBOARD_ROWS);
+  await sendReply(chatId, 'Admin shortcuts are available on your keyboard:', ADMIN_KEYBOARD_ROWS);
+  await sendMsg(chatId, '<b>Library admin control panel</b>', menuInlineKeyboard());
 }
 
 /**
@@ -145,18 +175,14 @@ export async function handleLive(
 ): Promise<void> {
   const now = new Date();
 
-  const [inactiveSeats, activeSessions] = await Promise.all([
-    Seat.find({ number: { $gte: 1, $lte: TOTAL_SEATS }, isActive: false }).select('number').lean(),
-    Session.find({ status: 'active' })
+  const activeSessions = await Session.find({ status: 'active' })
       .populate<{ student: { name: string } }>('student', 'name')
       .populate<{ seat: { number: number } }>('seat', 'number')
-      .sort({ shiftEndsAt: 1 }),
-  ]);
+      .sort({ shiftEndsAt: 1 });
 
-  const capacity = TOTAL_SEATS - new Set(inactiveSeats.map((seat) => seat.number)).size;
   const count = activeSessions.length;
   const overtimeCount = activeSessions.filter((session) => session.shiftEndsAt < now).length;
-  const freeSeats = Math.max(0, capacity - count);
+  const freeSeats = Math.max(0, TOTAL_SEATS - count);
   const lines = activeSessions.map((session) => {
     const name = escapeHtml(session.student?.name || 'Unknown');
     const seatNumber = session.seat?.number ?? '?';
@@ -170,7 +196,9 @@ export async function handleLive(
     '',
     ...(lines.length ? lines : ['No students are checked in.']),
   ].join('\n');
-  await sendMsg(chatId, text, [[{ text: '🔄 Refresh', callback_data: callbackData('live_refresh', '0') }]]);
+  await sendMsg(chatId, text, withHomeButton([
+    [{ text: '🔄 Refresh', callback_data: callbackData('live_refresh', '0') }],
+  ]));
 }
 
 export async function handlePending(
@@ -184,7 +212,7 @@ export async function handlePending(
   }).sort({ createdAt: -1 }).limit(25);
 
   if (students.length === 0) {
-    await sendMsg(chatId, '📝 <b>Pending requests</b>\n\nNo pending registrations.');
+    await sendMsg(chatId, '📝 <b>Pending requests</b>\n\nNo pending registrations.', homeKeyboard());
     return;
   }
 
@@ -193,10 +221,10 @@ export async function handlePending(
       `📝 <b>${escapeHtml(student.name)}</b>\n` +
       `Phone: ${escapeHtml(student.phone ?? '—')}\n` +
       `Seat: ${student.seatNumber ?? '—'} · Shift: ${student.shiftHours ?? '—'}h`;
-    await sendMsg(chatId, text, [[
+    await sendMsg(chatId, text, withHomeButton([[
       { text: '✅ Approve', callback_data: callbackData('student_approve', student._id.toString()) },
       { text: '❌ Reject', callback_data: callbackData('student_reject', student._id.toString()) },
-    ]]);
+    ]]));
   }
 }
 
@@ -221,14 +249,15 @@ export async function handleUnpaidFees(
   const summary = summaries[0] ?? { total: 0, count: 0 };
 
   if (summary.count === 0) {
-    await sendMsg(chatId, `💰 <b>Unpaid fees</b>\n\nNo unpaid fees for ${months.join(' or ')}.`);
+    await sendMsg(chatId, `💰 <b>Unpaid fees</b>\n\nNo unpaid fees for ${months.join(' or ')}.`, homeKeyboard());
     return;
   }
 
   await sendMsg(
     chatId,
     `💰 <b>Unpaid fees</b> (${summary.count} records; showing ${fees.length})\n` +
-      `Total pending: ₹${summary.total.toLocaleString('en-IN')}`
+      `Total pending: ₹${summary.total.toLocaleString('en-IN')}`,
+      homeKeyboard()
   );
   for (const fee of fees) {
     const student = fee.student;
@@ -236,10 +265,10 @@ export async function handleUnpaidFees(
       `💰 <b>${escapeHtml(student?.name ?? 'Former student')}</b>\n` +
       `Month: ${fee.month} · Amount: ₹${fee.amount.toLocaleString('en-IN')}\n` +
       `Phone: ${escapeHtml(student?.phone ?? '—')}`;
-    await sendMsg(chatId, text, [[
+    await sendMsg(chatId, text, withHomeButton([[
       { text: '✔ Mark paid', callback_data: callbackData('fee_paid', fee._id.toString()) },
       { text: '📩 Send reminder', callback_data: callbackData('fee_remind', fee._id.toString()) },
-    ]]);
+    ]]));
   }
 }
 
@@ -249,7 +278,7 @@ export async function handleUnpaidFees(
  */
 export async function handleOvertime(
   chatId: string,
-  sendReply: typeof sendReplyKeyboard = sendReplyKeyboard
+  sendMsg: typeof sendMessageHtml = sendMessageHtml
 ): Promise<void> {
   const now = new Date();
 
@@ -263,7 +292,7 @@ export async function handleOvertime(
 
   if (overtimeSessions.length === 0) {
     const text = '⏰ <b>Overtime Status</b>\n\n✅ No students are in overtime right now.';
-    await sendReply(chatId, text, ADMIN_KEYBOARD_ROWS, 'HTML');
+    await sendMsg(chatId, text, homeKeyboard());
     return;
   }
 
@@ -279,7 +308,7 @@ export async function handleOvertime(
     text += `  ${s.shiftHours}h shift · ended ${shiftEndsAtIST} · ⚠️ <b>${minutesOver}m over</b>\n`;
   }
 
-  await sendReply(chatId, text, ADMIN_KEYBOARD_ROWS, 'HTML');
+  await sendMsg(chatId, text, homeKeyboard());
 }
 
 /**
@@ -507,18 +536,44 @@ export async function handleBotCallbackQuery(
       [, action, id] = match;
     }
 
-    const complete = async (answerText: string, messageText: string): Promise<void> => {
+    const complete = async (
+      answerText: string,
+      messageText: string,
+      keyboard: TelegramInlineKeyboard = homeKeyboard()
+    ): Promise<void> => {
       await answerOnce(answerText);
-      await edit(chatId, messageId, messageText, []);
+      await edit(chatId, messageId, messageText, keyboard);
     };
 
-    if (action === 'live_refresh' && id === '0') {
-      const refresh = async (cid: string, text: string, keyboard?: TelegramInlineKeyboard) =>
-        edit(cid, messageId, text, keyboard);
-      await handleLive(chatId, refresh);
-      await answerOnce('Updated.');
+    if (action === 'menu' && id === '0') {
+      await complete('Admin menu.', '<b>Library admin control panel</b>', menuInlineKeyboard());
       return;
     }
+
+    if (action === 'menu_live' || action === 'menu_overtime' || action === 'menu_pending' || action === 'menu_unpaid' || action === 'live_refresh') {
+      let firstOutput = true;
+      const render = async (
+        targetChatId: string,
+        text: string,
+        keyboard?: TelegramInlineKeyboard
+      ): Promise<TelegramSendResult> => {
+        const finalKeyboard = keyboard ?? homeKeyboard();
+        if (firstOutput) {
+          firstOutput = false;
+          return edit(targetChatId, messageId, text, finalKeyboard);
+        }
+        return sendMessageHtml(targetChatId, text, finalKeyboard);
+      };
+
+      await answerOnce(action === 'live_refresh' ? 'Updated.' : 'Opening menu item.');
+      if (action === 'menu_live' || action === 'live_refresh') await handleLive(chatId, render);
+      else if (action === 'menu_overtime') await handleOvertime(chatId, render);
+      else if (action === 'menu_pending') await handlePending(chatId, render);
+      else await handleUnpaidFees(chatId, render);
+      return;
+    }
+
+    const finalKeyboard = homeKeyboard();
 
     if (action === 'student_approve') {
       const result = await updateStudentStatus(id, 'approved', config.defaultMonthlyFee, 'pending');
@@ -530,7 +585,8 @@ export async function handleBotCallbackQuery(
         : `\n\n✅ Approved by ${escapeHtml(admin.name)}.`;
       await complete(
         result.alreadyHandled ? 'Already handled' : 'Approved.',
-        `${originalText}${suffix}${feeWarning}`
+        `${originalText}${suffix}${feeWarning}`,
+        finalKeyboard
       );
       return;
     }
@@ -541,10 +597,10 @@ export async function handleBotCallbackQuery(
         await complete('Already handled', `${originalText}\n\nℹ️ Already handled.`);
         return;
       }
-      const keyboard: TelegramInlineKeyboard = [[
+      const keyboard: TelegramInlineKeyboard = withHomeButton([[
         { text: '✅ Yes, reject', callback_data: callbackData('student_reject_yes', id) },
         { text: '↩ No', callback_data: callbackData('student_reject_no', id) },
-      ]];
+      ]]);
       await answerOnce('Confirm rejection.');
       await edit(
         chatId,
@@ -609,10 +665,10 @@ export async function handleBotCallbackQuery(
         await complete('Already handled', `${originalText}\n\nℹ️ Already handled: student checked out.`);
         return;
       }
-      const keyboard: TelegramInlineKeyboard = [[
+      const keyboard: TelegramInlineKeyboard = withHomeButton([[
         { text: '✅ Confirm', callback_data: callbackData('ot_checkout_yes', id) },
         { text: '❌ Cancel', callback_data: callbackData('ot_checkout_no', id) },
-      ]];
+      ]]);
       await answerOnce('Confirm force checkout.');
       await edit(
         chatId,

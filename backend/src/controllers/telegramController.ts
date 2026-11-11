@@ -5,6 +5,7 @@ import { User, UserRole } from '../models/User';
 import { config } from '../config';
 import { createError } from '../middleware/errorHandler';
 import { sendMessage } from '../services/notifications/providers/telegram';
+import { removeAdminChatCommands } from '../services/notifications/telegramCommands';
 
 const LINK_CODE_TTL_MS = 10 * 60 * 1000;
 
@@ -129,7 +130,11 @@ export async function deleteAdminTelegramLink(
   next: NextFunction
 ): Promise<void> {
   try {
+    const admin = await User.findOne({ _id: req.user!._id, role: 'admin' })
+      .select('+telegramChatId')
+      .lean();
     await unlink(req, 'admin');
+    if (admin?.telegramChatId) await removeAdminChatCommands(admin.telegramChatId);
     res.json({ success: true, message: 'Telegram disconnected.' });
   } catch (error) {
     next(error);

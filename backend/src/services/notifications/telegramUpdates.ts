@@ -17,6 +17,7 @@ import {
   handleUnpaidFees,
   ADMIN_REFUSAL_MESSAGE,
 } from './adminBotHandlers';
+import { registerAdminChatCommands } from './telegramCommands';
 
 export type TelegramSendMessage = (chatId: string, text: string) => Promise<unknown>;
 
@@ -51,7 +52,8 @@ const START_MESSAGE = 'Open the library web app and press Connect Telegram to li
 
 export async function handleTelegramUpdate(
   update: unknown,
-  send: TelegramSendMessage = sendMessage
+  send: TelegramSendMessage = sendMessage,
+  registerAdminCommands: typeof registerAdminChatCommands = registerAdminChatCommands
 ): Promise<void> {
   const parsed = telegramUpdateSchema.safeParse(update);
   if (!parsed.success) return;
@@ -65,8 +67,7 @@ export async function handleTelegramUpdate(
   const message = parsed.data.message;
   if (
     !message?.text ||
-    message.chat?.id === undefined ||
-    message.chat.type !== 'private'
+    message.chat?.id === undefined
   ) return;
 
   const chatId = String(message.chat.id);
@@ -82,6 +83,7 @@ export async function handleTelegramUpdate(
 
   // 2. /start command (linking flow)
   if (normalizedCommand === '/start') {
+    if (message.chat.type !== 'private') return;
     if (parts.length === 1) {
       await send(chatId, START_MESSAGE);
       return;
@@ -140,12 +142,15 @@ export async function handleTelegramUpdate(
       chatId,
       linkedUser.role === 'admin' ? ADMIN_CONNECTED_MESSAGE : STUDENT_CONNECTED_MESSAGE
     );
+    if (linkedUser.role === 'admin' && linkedUser.status === 'approved' && !linkedUser.isDeleted) {
+      await registerAdminCommands(chatId);
+    }
     return;
   }
 
   // 3. Admin commands and persistent reply-keyboard labels
   const isMenu = normalizedCommand === '/menu';
-  const isLive = normalizedCommand === '/live' || rawText === '👥 Live now' || rawText === '📊 Live';
+  const isLive = normalizedCommand === '/live' || rawText === '👥 Live seats';
   const isPending = normalizedCommand === '/pending' || rawText === '📝 Pending requests';
   const isUnpaid = normalizedCommand === '/unpaid' || rawText === '💰 Unpaid fees';
   const isOvertime = normalizedCommand === '/overtime' || rawText === '⏱ Overtime' || rawText === '⏰ Overtime';
@@ -174,7 +179,7 @@ export async function handleTelegramUpdate(
         };
 
     if (isMenu) {
-      await handleAdminMenu(chatId, sendReply);
+      await handleAdminMenu(chatId, sendHtml, sendReply);
       return;
     }
 
@@ -194,12 +199,12 @@ export async function handleTelegramUpdate(
     }
 
     if (isOvertime) {
-      await handleOvertime(chatId, sendReply);
+      await handleOvertime(chatId, sendHtml);
       return;
     }
 
     if (isHelp) {
-      await handleHelp(chatId, sendReply);
+      await handleHelp(chatId, sendReply, sendHtml);
       return;
     }
   }

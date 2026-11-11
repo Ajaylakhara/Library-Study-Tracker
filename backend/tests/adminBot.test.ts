@@ -20,6 +20,8 @@ import {
   handleLive,
   handlePending,
   handleUnpaidFees,
+  handleAdminMenu,
+  menuInlineKeyboard,
   handleOvertime,
   buildOvertimeAlertText,
   buildOvertimeKeyboard,
@@ -390,6 +392,15 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent).toEqual([ADMIN_REFUSAL_MESSAGE]);
     });
 
+    it('replies politely to admin commands sent from a group chat', async () => {
+      const sent: string[] = [];
+      await handleTelegramUpdate(
+        { message: { text: '/live', chat: { id: linkedAdminChatId, type: 'group' } } },
+        async (_cid, text) => { sent.push(text); }
+      );
+      expect(sent).toEqual([ADMIN_REFUSAL_MESSAGE]);
+    });
+
     it('responds to /help with command list', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
@@ -410,12 +421,17 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       );
       expect(sent).toContain('Library admin control panel:');
       expect(ADMIN_KEYBOARD_ROWS).toEqual([
-        ['👥 Live now', '📝 Pending requests'],
-        ['💰 Unpaid fees', '⏱ Overtime'],
+        ['👥 Live seats', '⏱ Overtime'],
+        ['📝 Pending requests', '💰 Unpaid fees'],
       ]);
     });
 
     it('handles /live with current counts and escaped names', async () => {
+      const activeCount = await Session.countDocuments({ status: 'active' });
+      const overtimeCount = await Session.countDocuments({
+        status: 'active',
+        shiftEndsAt: { $lt: new Date() },
+      });
       const sent: string[] = [];
       await handleTelegramUpdate(
         { message: { text: '/live', chat: { id: linkedAdminChatId, type: 'private' } } },
@@ -426,11 +442,7 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent.length).toBeGreaterThanOrEqual(1);
       const combined = sent.join('\n');
       expect(combined).toContain('Live Study Status');
-      expect(combined).toContain(`Checked in: ${await Session.countDocuments({ status: 'active' })}`);
-      expect(combined).toContain(
-        `Overtime: ${await Session.countDocuments({ status: 'active', shiftEndsAt: { $lt: new Date() } })}`
-      );
-      expect(combined).toContain('Free:');
+      expect(combined).toContain(`Checked in: ${activeCount} · Overtime: ${overtimeCount} · Free: ${70 - activeCount}`);
       expect(combined).toContain('John &lt;Doe&gt; &amp; Friends');
       expect(combined).toContain(`Seat ${testSeat1.number}`);
     });
@@ -445,12 +457,37 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         }
       );
       expect(keyboard?.[0]?.[0]?.callback_data).toBe('live_refresh:0');
+      expect(keyboard?.[1]?.[0]?.callback_data).toBe('menu:0');
     });
 
-    it('maps reply-keyboard "👥 Live now" button text to /live', async () => {
+    it('renders the inline menu and persistent admin reply keyboard', async () => {
+      let inline: any;
+      let replyRows: string[][] = [];
+      await handleAdminMenu(
+        linkedAdminChatId,
+        async (_cid, _text, keyboard) => {
+          inline = keyboard;
+          return { ok: true };
+        },
+        async (_cid, _text, rows) => {
+          replyRows = rows;
+          return { ok: true };
+        }
+      );
+      expect(inline).toEqual(menuInlineKeyboard());
+      expect(inline.flat().map((button: any) => button.text)).toEqual([
+        '👥 Live seats',
+        '⏱ Overtime',
+        '📝 Pending requests',
+        '💰 Unpaid fees',
+      ]);
+      expect(replyRows).toEqual(ADMIN_KEYBOARD_ROWS);
+    });
+
+    it('maps reply-keyboard "👥 Live seats" button text to /live', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
-        { message: { text: '👥 Live now', chat: { id: linkedAdminChatId, type: 'private' } } },
+        { message: { text: '👥 Live seats', chat: { id: linkedAdminChatId, type: 'private' } } },
         async (_cid, text) => {
           sent.push(text);
         }

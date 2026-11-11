@@ -1,4 +1,9 @@
 import { config } from '../config';
+import mongoose from 'mongoose';
+import {
+  registerLinkedAdminCommands,
+  setDefaultTelegramCommands,
+} from '../services/notifications/telegramCommands';
 
 interface TelegramApiResult {
   ok?: boolean;
@@ -51,7 +56,7 @@ function printResult(result: TelegramApiResult): void {
 
 async function main(): Promise<void> {
   const action = process.argv[2];
-  if (!action) throw new Error('Specify set-webhook, webhook-info, or delete-webhook.');
+  if (!action) throw new Error('Specify set-webhook, webhook-info, delete-webhook, or set-commands.');
 
   if (action === 'set-webhook') {
     const publicHost = process.argv[3] ?? config.telegram.publicUrl;
@@ -91,7 +96,26 @@ async function main(): Promise<void> {
     return;
   }
 
-  throw new Error('Specify set-webhook, webhook-info, or delete-webhook.');
+  if (action === 'set-commands') {
+    await mongoose.connect(config.mongoUri, { serverSelectionTimeoutMS: 15000 });
+    try {
+      const defaultsSet = await setDefaultTelegramCommands();
+      const admins = await registerLinkedAdminCommands();
+      console.log(JSON.stringify({
+        defaultsSet,
+        linkedAdmins: admins.total,
+        failedAdminCommandUpdates: admins.failed,
+      }));
+      if (!defaultsSet || admins.failed > 0) {
+        throw new Error('Could not update all Telegram command menus.');
+      }
+    } finally {
+      await mongoose.disconnect();
+    }
+    return;
+  }
+
+  throw new Error('Specify set-webhook, webhook-info, delete-webhook, or set-commands.');
 }
 
 void main().catch((error: unknown) => {

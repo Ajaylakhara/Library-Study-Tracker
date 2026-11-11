@@ -11,6 +11,7 @@
     "telegram:set-webhook": "ts-node src/scripts/telegram.ts set-webhook",
     "telegram:webhook-info": "ts-node src/scripts/telegram.ts webhook-info",
     "telegram:delete-webhook": "ts-node src/scripts/telegram.ts delete-webhook",
+    "telegram:set-commands": "ts-node src/scripts/telegram.ts set-commands",
     "test:db": "ts-node src/scripts/testDb.ts",
     "seats:reconcile": "ts-node src/scripts/reconcileStudentSeats.ts",
     "test": "jest --runInBand --forceExit"

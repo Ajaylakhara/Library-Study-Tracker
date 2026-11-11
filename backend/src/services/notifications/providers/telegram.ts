@@ -44,6 +44,11 @@ export interface TelegramSendResult {
   messageId?: number;
 }
 
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
 // ─── Internal types ───────────────────────────────────────────────────────────
 
 interface TelegramApiResponse {
@@ -98,7 +103,9 @@ async function callTelegramApi(
 ): Promise<TelegramSendResult & { raw?: TelegramApiResponse }> {
   const { botToken } = config.telegram;
   if (!botToken) {
-    return { ok: false, description: 'Telegram is not configured.' };
+    const description = 'Telegram is not configured.';
+    logTelegramError(method, undefined, description);
+    return { ok: false, description };
   }
 
   let response: Response;
@@ -169,6 +176,24 @@ async function callTelegramApi(
       : undefined;
 
   return { ok: true, messageId: msgId, raw: result };
+}
+
+export async function setMyCommands(
+  commands: TelegramBotCommand[],
+  scope?: Record<string, unknown>
+): Promise<TelegramSendResult> {
+  const result = await callTelegramApi('setMyCommands', {
+    commands,
+    ...(scope ? { scope } : {}),
+  });
+  return { ok: result.ok, errorCode: result.errorCode, description: result.description };
+}
+
+export async function deleteMyCommands(
+  scope: Record<string, unknown>
+): Promise<TelegramSendResult> {
+  const result = await callTelegramApi('deleteMyCommands', { scope });
+  return { ok: result.ok, errorCode: result.errorCode, description: result.description };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

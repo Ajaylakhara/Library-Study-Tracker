@@ -148,7 +148,8 @@ describe('Telegram linking', () => {
     };
     await handleTelegramUpdate(
       { message: { text: `/start ${code}`, chat: { id: adminChatId, type: 'private' } } },
-      sendMessage
+      sendMessage,
+      async () => true
     );
 
     const linkedAdmin = await User.findById(adminId)
