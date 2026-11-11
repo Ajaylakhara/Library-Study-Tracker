@@ -298,20 +298,40 @@ describe('Telegram linking', () => {
     await User.findByIdAndDelete(otherAdminWithChat._id);
   });
 
-  it('replies to the public webhook only after validating its secret and processes privately', async () => {
-    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), {
+  it('awaits webhook processing after validating its secret', async () => {
+    const originalVercel = process.env.VERCEL;
+    delete process.env.VERCEL;
+    let finishTelegramRequest!: () => void;
+    let signalTelegramRequest!: () => void;
+    const telegramRequestStarted = new Promise<void>((resolve) => {
+      signalTelegramRequest = resolve;
+    });
+    const telegramRequestGate = new Promise<void>((resolve) => {
+      finishTelegramRequest = resolve;
+    });
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      signalTelegramRequest();
+      await telegramRequestGate;
+      return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-      })
-    );
+      });
+    });
     try {
-      const privateResponse = await request(app)
+      let responseReceived = false;
+      const privateResponsePromise = request(app)
         .post('/api/telegram/webhook')
         .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
-        .send({ message: { text: '/myid', chat: { id: 70045, type: 'private' } } });
+        .send({ message: { text: '/myid', chat: { id: 70045, type: 'private' } } })
+        .then((response) => {
+          responseReceived = true;
+          return response;
+        });
+      await telegramRequestStarted;
+      expect(responseReceived).toBe(false);
+      finishTelegramRequest();
+      const privateResponse = await privateResponsePromise;
       expect(privateResponse.status).toBe(200);
-      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       const sentBody = JSON.parse(fetchSpy.mock.calls[0][1]?.body as string) as {
         chat_id: string;
@@ -325,10 +345,11 @@ describe('Telegram linking', () => {
         .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
         .send({ message: { text: '/myid', chat: { id: 70046, type: 'group' } } });
       expect(groupResponse.status).toBe(200);
-      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
+      if (originalVercel === undefined) delete process.env.VERCEL;
+      else process.env.VERCEL = originalVercel;
     }
   });
 
@@ -396,8 +417,8 @@ describe('Telegram linking', () => {
         .send({ message: { text: '/myid', chat: { id: 70050, type: 'private' } } });
 
       expect(failedUpdateResponse.status).toBe(200);
-      expect(loggedErrors.join(' ')).toContain('type=message');
-      expect(loggedErrors.join(' ')).toContain('error=Error');
+      expect(loggedErrors.join(' ')).toContain('[TelegramAPI] sendMessage failed');
+      expect(loggedErrors.join(' ')).toContain('request failed (Error)');
     } finally {
       connectSpy.mockRestore();
       fetchSpy.mockRestore();

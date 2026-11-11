@@ -12,6 +12,9 @@ import {
   handleOvertime,
   handleHelp,
   handleBotCallbackQuery,
+  handleAdminMenu,
+  handlePending,
+  handleUnpaidFees,
   ADMIN_REFUSAL_MESSAGE,
 } from './adminBotHandlers';
 
@@ -55,7 +58,7 @@ export async function handleTelegramUpdate(
 
   // Handle callback_query (buttons)
   if (parsed.data.callback_query) {
-    await handleBotCallbackQuery(parsed.data.callback_query as any);
+    await handleBotCallbackQuery(parsed.data.callback_query);
     return;
   }
 
@@ -140,12 +143,15 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // 3. Admin commands (/live, /overtime, /help, and reply button labels)
-  const isLive = normalizedCommand === '/live' || rawText === '📊 Live';
-  const isOvertime = normalizedCommand === '/overtime' || rawText === '⏰ Overtime';
+  // 3. Admin commands and persistent reply-keyboard labels
+  const isMenu = normalizedCommand === '/menu';
+  const isLive = normalizedCommand === '/live' || rawText === '👥 Live now' || rawText === '📊 Live';
+  const isPending = normalizedCommand === '/pending' || rawText === '📝 Pending requests';
+  const isUnpaid = normalizedCommand === '/unpaid' || rawText === '💰 Unpaid fees';
+  const isOvertime = normalizedCommand === '/overtime' || rawText === '⏱ Overtime' || rawText === '⏰ Overtime';
   const isHelp = normalizedCommand === '/help';
 
-  if (isLive || isOvertime || isHelp) {
+  if (isMenu || isLive || isPending || isUnpaid || isOvertime || isHelp) {
     const admin = await requireLinkedAdmin(chatId, message.chat.type);
     if (!admin) {
       await send(chatId, ADMIN_REFUSAL_MESSAGE);
@@ -160,15 +166,30 @@ export async function handleTelegramUpdate(
           return { ok: true };
         };
 
-    const sendMsg = send === sendMessage
+    const sendHtml = send === sendMessage
       ? sendMessageHtml
       : async (cid: string, text: string) => {
           await send(cid, text);
           return { ok: true };
         };
 
+    if (isMenu) {
+      await handleAdminMenu(chatId, sendReply);
+      return;
+    }
+
     if (isLive) {
-      await handleLive(chatId, sendReply, sendMsg);
+      await handleLive(chatId, sendHtml);
+      return;
+    }
+
+    if (isPending) {
+      await handlePending(chatId, sendHtml);
+      return;
+    }
+
+    if (isUnpaid) {
+      await handleUnpaidFees(chatId, sendHtml);
       return;
     }
 

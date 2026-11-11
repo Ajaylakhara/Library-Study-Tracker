@@ -2,7 +2,7 @@ import mongoose, { ClientSession, Types } from 'mongoose';
 import { createError } from '../../middleware/errorHandler';
 import { Session } from '../../models/Session';
 import { User, UserStatus } from '../../models/User';
-import { performForceCheckout } from '../notifications/adminBotHandlers';
+import { performForceCheckout } from '../forceCheckout';
 
 type StudentStateUpdate = {
   status?: UserStatus;
@@ -13,6 +13,7 @@ type StudentStateUpdate = {
 
 interface ReleaseOptions {
   stateUpdate?: StudentStateUpdate;
+  expectedStatus?: UserStatus;
 }
 
 interface AssignmentSnapshot {
@@ -82,7 +83,8 @@ async function checkoutActiveSession(
 
 async function releaseInTransaction(
   studentId: Types.ObjectId,
-  stateUpdate: StudentStateUpdate
+  stateUpdate: StudentStateUpdate,
+  expectedStatus?: UserStatus
 ): Promise<Types.ObjectId | null> {
   const dbSession = await mongoose.startSession();
   let checkedOutSessionId: Types.ObjectId | null = null;
@@ -90,6 +92,9 @@ async function releaseInTransaction(
     await dbSession.withTransaction(async () => {
       const student = await User.findOne({ _id: studentId, role: 'student' }).session(dbSession);
       if (!student) throw createError('Student not found.', 404);
+      if (expectedStatus && student.status !== expectedStatus) {
+        throw createError('Student status changed. Reload and try again.', 409);
+      }
 
       const assignment: AssignmentSnapshot = {
         seatNumber: student.seatNumber,
@@ -124,10 +129,14 @@ async function releaseInTransaction(
 
 async function releaseWithOrderedUpdates(
   studentId: Types.ObjectId,
-  stateUpdate: StudentStateUpdate
+  stateUpdate: StudentStateUpdate,
+  expectedStatus?: UserStatus
 ): Promise<void> {
   const student = await User.findOne({ _id: studentId, role: 'student' });
   if (!student) throw createError('Student not found.', 404);
+  if (expectedStatus && student.status !== expectedStatus) {
+    throw createError('Student status changed. Reload and try again.', 409);
+  }
 
   const assignment: AssignmentSnapshot = {
     seatNumber: student.seatNumber,
@@ -176,15 +185,16 @@ export async function releaseStudentSeat(
   if (!mongoose.isValidObjectId(studentId)) throw createError('Student not found.', 404);
   const id = new Types.ObjectId(studentId);
   const stateUpdate = options.stateUpdate ?? {};
+  const expectedStatus = options.expectedStatus;
 
   try {
-    const checkedOutSessionId = await releaseInTransaction(id, stateUpdate);
+    const checkedOutSessionId = await releaseInTransaction(id, stateUpdate, expectedStatus);
     if (checkedOutSessionId) {
       const { resolveOvertimeAlerts } = await import('../notifications/overtimeActions');
       await resolveOvertimeAlerts(checkedOutSessionId);
     }
   } catch (error) {
     if (!isUnsupportedTransactionError(error)) throw error;
-    await releaseWithOrderedUpdates(id, stateUpdate);
+    await releaseWithOrderedUpdates(id, stateUpdate, expectedStatus);
   }
 }

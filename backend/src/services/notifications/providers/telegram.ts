@@ -54,6 +54,12 @@ interface TelegramApiResponse {
   result?: { message_id?: number } | boolean;
 }
 
+function logTelegramError(method: string, errorCode: number | undefined, description: string): void {
+  console.error(
+    `[TelegramAPI] ${method} failed${errorCode === undefined ? '' : ` (code=${errorCode})`}: ${description}`
+  );
+}
+
 // ─── Keyboard builder ─────────────────────────────────────────────────────────
 
 function normalizeKeyboard(keyboard: TelegramInlineKeyboard): TelegramInlineButton[][] {
@@ -103,7 +109,12 @@ async function callTelegramApi(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
-  } catch {
+  } catch (error) {
+    logTelegramError(
+      method,
+      undefined,
+      `request failed (${error instanceof Error ? error.name : 'UnknownError'}).`
+    );
     return { ok: false, description: 'Telegram API request failed.' };
   }
 
@@ -111,6 +122,7 @@ async function callTelegramApi(
   try {
     result = (await response.json()) as TelegramApiResponse;
   } catch {
+    logTelegramError(method, response.status, 'Telegram API returned an invalid response.');
     return {
       ok: false,
       errorCode: response.status,
@@ -120,12 +132,14 @@ async function callTelegramApi(
 
   // 403 — bot blocked by user: permanent failure, do not retry
   if (response.status === 403 || result.error_code === 403) {
+    logTelegramError(method, 403, result.description ?? 'bot blocked by user');
     return { ok: false, errorCode: 403, description: 'bot blocked by user', raw: result };
   }
 
   // 429 — rate limited: surface retry_after
   if (response.status === 429 || result.error_code === 429) {
     const retryAfter = result.parameters?.retry_after ?? 1;
+    logTelegramError(method, 429, result.description ?? `rate limited; retry after ${retryAfter}s`);
     return {
       ok: false,
       errorCode: 429,
@@ -136,12 +150,13 @@ async function callTelegramApi(
   }
 
   if (!response.ok || !result.ok) {
+    const errorCode = result.error_code ?? response.status;
+    const description = result.description ?? 'Telegram API request failed.';
+    logTelegramError(method, errorCode, description);
     return {
       ok: false,
-      ...(result.error_code != null || response.status
-        ? { errorCode: result.error_code ?? response.status }
-        : {}),
-      description: result.description ?? 'Telegram API request failed.',
+      errorCode,
+      description,
       raw: result,
     };
   }
@@ -252,6 +267,7 @@ export async function editMessageText(
     chat_id: chatId,
     message_id: messageId,
     text,
+    parse_mode: 'HTML',
   };
 
   if (keyboard !== undefined) {

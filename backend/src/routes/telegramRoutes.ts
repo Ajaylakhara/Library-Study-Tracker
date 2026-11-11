@@ -55,26 +55,21 @@ router.post(
       return;
     }
 
-    if (process.env.VERCEL) {
-      try {
-        await connectDB();
-        await handleTelegramUpdate(req.body);
-      } catch (error: unknown) {
-        const errorName = error instanceof Error ? error.name : 'UnknownError';
-        console.error(
-          `[TelegramWebhook] Update processing failed (type=${getTelegramUpdateType(req.body)}, error=${errorName}).`
-        );
-      }
-
-      res.sendStatus(200);
-      return;
+    const updateType = getTelegramUpdateType(req.body);
+    console.info(`[TelegramWebhook] Received update type=${updateType}.`);
+    try {
+      await connectDB();
+      await handleTelegramUpdate(req.body);
+    } catch (error: unknown) {
+      const errorDetails = error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error);
+      console.error(
+        `[TelegramWebhook] Update processing failed (type=${updateType}): ${errorDetails}`
+      );
     }
 
     res.sendStatus(200);
-    void handleTelegramUpdate(req.body).catch((error: unknown) => {
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      console.error(`[TelegramWebhook] Update processing failed (${errorName}).`);
-    });
   })
 );
 

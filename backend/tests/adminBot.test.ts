@@ -18,15 +18,19 @@ import {
   requireLinkedAdmin,
   handleHelp,
   handleLive,
+  handlePending,
+  handleUnpaidFees,
   handleOvertime,
   buildOvertimeAlertText,
   buildOvertimeKeyboard,
   recordManualNotificationSent,
   performForceCheckout,
   handleBotCallbackQuery,
+  callbackData,
   escapeHtml,
   splitIntoChunks,
   ADMIN_REFUSAL_MESSAGE,
+  ADMIN_KEYBOARD_ROWS,
 } from '../src/services/notifications/adminBotHandlers';
 import { handleTelegramUpdate } from '../src/services/notifications/telegramUpdates';
 import { runShiftMonitor } from '../src/jobs/shiftMonitor';
@@ -35,7 +39,10 @@ import { User } from '../src/models/User';
 import { Seat } from '../src/models/Seat';
 import { Session } from '../src/models/Session';
 import { Notification } from '../src/models/Notification';
+import { Fee } from '../src/models/Fee';
 import { config } from '../src/config';
+import { getAssignableSeatNumbers } from '../src/utils/seatAssignments';
+import { previousMonthString, toMonthString } from '../src/utils/time';
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -153,6 +160,11 @@ describe('escapeHtml & splitIntoChunks', () => {
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(2000);
     }
+  });
+
+  it('keeps callback data within Telegram limits and rejects oversized values', () => {
+    expect(Buffer.byteLength(callbackData('fee_paid', 'a'.repeat(50)), 'utf8')).toBeLessThanOrEqual(64);
+    expect(() => callbackData('fee_paid', 'a'.repeat(60))).toThrow('must not exceed 64 bytes');
   });
 });
 
@@ -355,6 +367,18 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent[0]).not.toContain('Seat');
     });
 
+    it.each(['/menu', '/pending', '/unpaid'])(
+      'refuses unauthorized users on %s',
+      async (command) => {
+        const sent: string[] = [];
+        await handleTelegramUpdate(
+          { message: { text: command, chat: { id: unlinkedChatId, type: 'private' } } },
+          async (_cid, text) => { sent.push(text); }
+        );
+        expect(sent).toEqual([ADMIN_REFUSAL_MESSAGE]);
+      }
+    );
+
     it('refuses a student user on /overtime', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
@@ -378,7 +402,20 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent[0]).toContain('/overtime');
     });
 
-    it('handles /live and shows active sessions grouped by shift with escaped names', async () => {
+    it('shows the persistent admin menu only to linked admins', async () => {
+      const sent: string[] = [];
+      await handleTelegramUpdate(
+        { message: { text: '/menu', chat: { id: linkedAdminChatId, type: 'private' } } },
+        async (_cid, text) => { sent.push(text); }
+      );
+      expect(sent).toContain('Library admin control panel:');
+      expect(ADMIN_KEYBOARD_ROWS).toEqual([
+        ['👥 Live now', '📝 Pending requests'],
+        ['💰 Unpaid fees', '⏱ Overtime'],
+      ]);
+    });
+
+    it('handles /live with current counts and escaped names', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
         { message: { text: '/live', chat: { id: linkedAdminChatId, type: 'private' } } },
@@ -389,20 +426,243 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent.length).toBeGreaterThanOrEqual(1);
       const combined = sent.join('\n');
       expect(combined).toContain('Live Study Status');
+      expect(combined).toContain(`Checked in: ${await Session.countDocuments({ status: 'active' })}`);
+      expect(combined).toContain(
+        `Overtime: ${await Session.countDocuments({ status: 'active', shiftEndsAt: { $lt: new Date() } })}`
+      );
+      expect(combined).toContain('Free:');
       expect(combined).toContain('John &lt;Doe&gt; &amp; Friends');
       expect(combined).toContain(`Seat ${testSeat1.number}`);
-      expect(combined).toContain('4h Shift');
     });
 
-    it('maps reply-keyboard "📊 Live" button text to /live', async () => {
+    it('adds an inline Refresh button to /live output', async () => {
+      let keyboard: any;
+      await handleLive(
+        linkedAdminChatId,
+        async (_cid, _text, buttons) => {
+          keyboard = buttons;
+          return { ok: true };
+        }
+      );
+      expect(keyboard?.[0]?.[0]?.callback_data).toBe('live_refresh:0');
+    });
+
+    it('maps reply-keyboard "👥 Live now" button text to /live', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
-        { message: { text: '📊 Live', chat: { id: linkedAdminChatId, type: 'private' } } },
+        { message: { text: '👥 Live now', chat: { id: linkedAdminChatId, type: 'private' } } },
         async (_cid, text) => {
           sent.push(text);
         }
       );
       expect(sent[0]).toContain('Live Study Status');
+    });
+
+    it('lists pending registrations with approve and reject actions', async () => {
+      const pending = await User.create({
+        name: 'Pending Telegram Student',
+        phone: testPhones[6],
+        role: 'student',
+        status: 'pending',
+      });
+      testUserIds.push(pending._id.toString());
+      const sent: string[] = [];
+      let keyboard: any;
+      try {
+        await handleTelegramUpdate(
+          { message: { text: '/pending', chat: { id: linkedAdminChatId, type: 'private' } } },
+          async (_cid, text) => { sent.push(text); }
+        );
+        await handlePending(
+          linkedAdminChatId,
+          async (_cid, _text, buttons) => {
+            keyboard = buttons;
+            return { ok: true };
+          }
+        );
+        expect(sent.join('\n')).toContain('Pending Telegram Student');
+        expect(keyboard?.flat().map((button: any) => button.callback_data)).toContain(
+          `student_approve:${pending._id}`
+        );
+        expect(keyboard?.flat().map((button: any) => button.callback_data)).toContain(
+          `student_reject:${pending._id}`
+        );
+      } finally {
+        await User.deleteOne({ _id: pending._id });
+      }
+    });
+
+    it('lists unpaid fees and includes their pending total', async () => {
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month: toMonthString(new Date()),
+        amount: 1250,
+        status: 'unpaid',
+      });
+      const sent: string[] = [];
+      let keyboards: any[] = [];
+      try {
+        const [summary] = await Fee.aggregate<{ total: number }>([
+          { $match: { status: 'unpaid', month: { $in: [toMonthString(new Date()), previousMonthString()] } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } },
+        ]);
+        await handleTelegramUpdate(
+          { message: { text: '/unpaid', chat: { id: linkedAdminChatId, type: 'private' } } },
+          async (_cid, text) => { sent.push(text); }
+        );
+        await handleUnpaidFees(
+          linkedAdminChatId,
+          async (_cid, _text, keyboard) => {
+            keyboards.push(keyboard);
+            return { ok: true };
+          }
+        );
+        expect(sent.join('\n')).toContain(
+          `Total pending: ₹${(summary?.total ?? 0).toLocaleString('en-IN')}`
+        );
+        expect(sent.join('\n')).toContain('John &lt;Doe&gt;');
+        const callbackDataValues = keyboards.flat(2)
+          .filter(Boolean)
+          .map((button: any) => button.callback_data)
+          .filter(Boolean);
+        expect(callbackDataValues).toContain(`fee_paid:${fee._id}`);
+        expect(callbackDataValues).toContain(`fee_remind:${fee._id}`);
+      } finally {
+        await Fee.deleteOne({ _id: fee._id });
+      }
+    });
+
+    it('approves a pending registration once and reports a race as already handled', async () => {
+      const availableSeats = await getAssignableSeatNumbers();
+      expect(availableSeats.length).toBeGreaterThan(0);
+      const pending = await User.create({
+        name: 'Approve Callback Student',
+        phone: testPhones[7],
+        role: 'student',
+        status: 'pending',
+        seatNumber: availableSeats[0],
+        shiftHours: 4,
+      });
+      const answers: string[] = [];
+      const edits: string[] = [];
+      const answer = async (_id: string, text?: string) => {
+        answers.push(text ?? '');
+        return { ok: true };
+      };
+      const edit = async (_chatId: string, _messageId: number, text: string) => {
+        edits.push(text);
+        return { ok: true };
+      };
+      const update = {
+        id: 'approve_once',
+        from: { id: linkedAdminChatId },
+        message: {
+          message_id: 501,
+          text: 'Pending registration',
+          chat: { id: linkedAdminChatId, type: 'private' },
+        },
+        data: callbackData('student_approve', pending._id.toString()),
+      };
+
+      try {
+        await handleBotCallbackQuery(update, answer as any, edit as any);
+        await handleBotCallbackQuery(update, answer as any, edit as any);
+        expect((await User.findById(pending._id))?.status).toBe('approved');
+        expect(answers).toEqual(['Approved.', 'Already handled']);
+        if (config.defaultMonthlyFee === 0) {
+          expect(edits[0]).toContain(
+            'Monthly fee is ₹0, set it on the website or no fee will be generated.'
+          );
+        }
+      } finally {
+        await Notification.deleteMany({ user: pending._id });
+        await User.deleteOne({ _id: pending._id });
+      }
+    });
+
+    it('requires rejection confirmation before applying the status change', async () => {
+      const pending = await User.create({
+        name: 'Reject Callback Student',
+        phone: testPhones[8],
+        role: 'student',
+        status: 'pending',
+      });
+      let confirmationData = '';
+      const answer = async () => ({ ok: true });
+      const edit = async (_chatId: string, _messageId: number, _text: string, keyboard?: any) => {
+        confirmationData = keyboard?.[0]?.[0]?.callback_data ?? '';
+        return { ok: true };
+      };
+
+      try {
+        await handleBotCallbackQuery(
+          {
+            id: 'reject_confirm_prompt',
+            from: { id: linkedAdminChatId },
+            message: {
+              message_id: 502,
+              text: 'Pending registration',
+              chat: { id: linkedAdminChatId, type: 'private' },
+            },
+            data: callbackData('student_reject', pending._id.toString()),
+          },
+          answer as any,
+          edit as any
+        );
+        expect(confirmationData).toBe(callbackData('student_reject_yes', pending._id.toString()));
+        await handleBotCallbackQuery(
+          {
+            id: 'reject_confirm_yes',
+            from: { id: linkedAdminChatId },
+            message: {
+              message_id: 502,
+              text: 'Reject student?',
+              chat: { id: linkedAdminChatId, type: 'private' },
+            },
+            data: confirmationData,
+          },
+          answer as any,
+          edit as any
+        );
+        expect((await User.findById(pending._id))?.status).toBe('rejected');
+      } finally {
+        await Notification.deleteMany({ user: pending._id });
+        await User.deleteOne({ _id: pending._id });
+      }
+    });
+
+    it('marks an unpaid fee once and treats a repeated callback as already handled', async () => {
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month: toMonthString(new Date()),
+        amount: 1100,
+        status: 'unpaid',
+      });
+      const answers: string[] = [];
+      const answer = async (_id: string, text?: string) => {
+        answers.push(text ?? '');
+        return { ok: true };
+      };
+      const edit = async () => ({ ok: true });
+      const update = {
+        id: 'fee_paid_callback',
+        from: { id: linkedAdminChatId },
+        message: {
+          message_id: 503,
+          text: 'Unpaid fee',
+          chat: { id: linkedAdminChatId, type: 'private' },
+        },
+        data: callbackData('fee_paid', fee._id.toString()),
+      };
+
+      try {
+        await handleBotCallbackQuery(update, answer as any, edit as any);
+        await handleBotCallbackQuery(update, answer as any, edit as any);
+        expect((await Fee.findById(fee._id))?.status).toBe('paid');
+        expect(answers).toEqual(['Marked paid.', 'Already handled']);
+      } finally {
+        await Fee.deleteOne({ _id: fee._id });
+      }
     });
 
     it('handles /overtime and shows overtime sessions with minutes over', async () => {
@@ -471,11 +731,11 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
 
       // Row 2: Mark as sent & Force checkout callbacks
       expect(keyboard[1][0].text).toBe('✅ Mark as sent');
-      expect(keyboard[1][0].callback_data).toBe(`ot:sent:${sessionId}`);
+      expect(keyboard[1][0].callback_data).toBe(`ot_sent:${sessionId}`);
       expect(Buffer.byteLength(keyboard[1][0].callback_data!)).toBeLessThan(64);
 
       expect(keyboard[1][1].text).toBe('🚪 Force checkout');
-      expect(keyboard[1][1].callback_data).toBe(`ot:force:${sessionId}`);
+      expect(keyboard[1][1].callback_data).toBe(`ot_force:${sessionId}`);
       expect(Buffer.byteLength(keyboard[1][1].callback_data!)).toBeLessThan(64);
     });
 
@@ -790,8 +1050,8 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(editedText).toContain('Are you sure?');
       expect(editedText).toContain('Callback &lt;Student&gt; &amp; Co'); // Escaped student name
       expect(editedKeyboard).toBeDefined();
-      expect(editedKeyboard[0][0].callback_data).toBe(`ot:fok:${callbackSession._id}`);
-      expect(editedKeyboard[0][1].callback_data).toBe(`ot:fcancel:${callbackSession._id}`);
+      expect(editedKeyboard[0][0].callback_data).toBe(`ot_checkout_yes:${callbackSession._id}`);
+      expect(editedKeyboard[0][1].callback_data).toBe(`ot_checkout_no:${callbackSession._id}`);
     });
 
     it('handles "Force checkout" Cancel: updates text to Cancelled and clears buttons', async () => {

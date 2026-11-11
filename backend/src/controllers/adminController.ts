@@ -11,12 +11,15 @@ import { Session } from '../models/Session';
 import { Fee } from '../models/Fee';
 import { Notification } from '../models/Notification';
 import { createError } from '../middleware/errorHandler';
-import { NotificationService } from '../services/notifications/NotificationService';
+import {
+  markFeePaid as markFeePaidAction,
+  updateStudentStatus as updateStudentStatusAction,
+} from '../services/adminActions';
 import { assertSeatAssignable, getAssignableSeatNumbers } from '../utils/seatAssignments';
 import { generateMonthlyFees } from '../jobs/monthlyFees';
 import { buildCsv } from '../utils/csv';
 import { resolveOvertimeAlerts } from '../services/notifications/overtimeActions';
-import { performForceCheckout } from '../services/notifications/adminBotHandlers';
+import { performForceCheckout } from '../services/forceCheckout';
 import { releaseStudentSeat } from '../services/students/releaseStudentSeat';
 import {
   diffMinutes,
@@ -260,52 +263,14 @@ const updateStatusSchema = z.object({
 export const updateStudentStatus = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { status, monthlyFee } = updateStatusSchema.parse(req.body);
-    const existing = await User.findOne({
-      _id: req.params.id,
-      role: 'student',
-      isDeleted: false,
+    const result = await updateStudentStatusAction(String(req.params.id), status, monthlyFee);
+    res.json({
+      success: true,
+      message: result.alreadyHandled
+        ? 'Already handled.'
+        : `Student status updated to ${status}.`,
+      data: result.student,
     });
-    if (!existing) throw createError('Student not found.', 404);
-
-    if (status === 'approved') {
-      if (existing.seatNumber === undefined || existing.shiftHours === undefined) {
-        throw createError('Choose an available seat and shift before approving this student.', 409);
-      }
-      await assertSeatAssignable(existing.seatNumber, existing._id);
-    }
-
-    const releaseSeat =
-      status === 'blocked' ||
-      status === 'rejected' ||
-      (status === 'pending' && existing.status === 'approved');
-    let student;
-    if (releaseSeat) {
-      await releaseStudentSeat(existing._id, {
-        stateUpdate: {
-          status,
-          ...(monthlyFee !== undefined && { monthlyFee }),
-        },
-      });
-      student = await User.findById(existing._id);
-    } else {
-      student = await User.findOneAndUpdate(
-          { _id: req.params.id, role: 'student', isDeleted: false },
-          { status, ...(monthlyFee !== undefined && { monthlyFee }) },
-          { new: true }
-        );
-    }
-    if (!student) throw createError('Student not found.', 404);
-
-    // Notify student on approval/rejection
-    if (status === 'approved' || status === 'rejected') {
-      await NotificationService.enqueue({
-        userId: student._id,
-        type: status,
-        vars: { name: student.name },
-      });
-    }
-
-    res.json({ success: true, message: `Student status updated to ${status}.`, data: student });
   } catch (err) {
     next(err);
   }
@@ -540,18 +505,12 @@ const markFeePaidSchema = z.object({
 export const markFeePaid = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { note } = markFeePaidSchema.parse(req.body ?? {});
-    const fee = await Fee.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: 'paid',
-        paidAt: new Date(),
-        markedBy: req.user!._id,
-        ...(note !== undefined && { note }),
-      },
-      { new: true }
-    );
-    if (!fee) throw createError('Fee record not found.', 404);
-    res.json({ success: true, message: 'Fee marked as paid.', data: fee });
+    const result = await markFeePaidAction(String(req.params.id), req.user!._id, note);
+    res.json({
+      success: true,
+      message: result.alreadyHandled ? 'Already handled.' : 'Fee marked as paid.',
+      data: result.fee,
+    });
   } catch (err) {
     next(err);
   }

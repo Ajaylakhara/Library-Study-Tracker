@@ -5,8 +5,7 @@
  *  - requireLinkedAdmin: single authorization helper checking private chat, admin role,
  *    approved status, not blocked, not soft-deleted, with linked telegramChatId.
  *  - handleHelp: lists admin bot commands.
- *  - handleLive: active sessions grouped by shift, chunked under 4096 characters,
- *    with capacity from active seat count.
+ *  - handleLive, handlePending, handleUnpaidFees: admin list views and actions.
  *  - handleOvertime: active sessions past shiftEndsAt with minutes over.
  *  - escapeHtml: escapes names and text for HTML parse mode.
  *  - buildOvertimeAlertText & buildOvertimeKeyboard: rich overtime message & buttons.
@@ -18,11 +17,15 @@
 import mongoose from 'mongoose';
 import { format } from 'date-fns-tz';
 import { User, IUser } from '../../models/User';
-import { Seat } from '../../models/Seat';
-import { Session, ISession } from '../../models/Session';
+import { Seat, TOTAL_SEATS } from '../../models/Seat';
+import { Session } from '../../models/Session';
 import { Notification, INotification } from '../../models/Notification';
-import { resolveOvertimeAlerts } from './overtimeActions';
-import { diffMinutes, formatDuration, TZ } from '../../utils/time';
+import { Fee } from '../../models/Fee';
+import { config } from '../../config';
+import { performForceCheckout } from '../forceCheckout';
+export { performForceCheckout } from '../forceCheckout';
+import { enqueueFeeReminder, markFeePaid, updateStudentStatus } from '../adminActions';
+import { diffMinutes, formatDuration, previousMonthString, toMonthString, TZ } from '../../utils/time';
 import { buildWhatsAppUrl } from '../../utils/phone';
 import {
   sendMessageHtml,
@@ -34,8 +37,19 @@ import {
   TelegramInlineButton,
 } from './providers/telegram';
 
-export const ADMIN_KEYBOARD_ROWS = [['📊 Live', '⏰ Overtime']];
+export const ADMIN_KEYBOARD_ROWS = [
+  ['👥 Live now', '📝 Pending requests'],
+  ['💰 Unpaid fees', '⏱ Overtime'],
+];
 export const ADMIN_REFUSAL_MESSAGE = '⛔ This bot is only accessible to authorized administrators.';
+
+export function callbackData(action: string, id: string): string {
+  const data = `${action}:${id}`;
+  if (Buffer.byteLength(data, 'utf8') > 64) {
+    throw new Error('Telegram callback_data must not exceed 64 bytes.');
+  }
+  return data;
+}
 
 /**
  * Escapes characters for Telegram HTML parse mode.
@@ -102,8 +116,11 @@ export async function handleHelp(
   const text =
     '📚 <b>Library Admin Bot Help</b>\n\n' +
     'Available commands:\n' +
-    '• /live (or <b>📊 Live</b>) — View students currently studying grouped by shift\n' +
-    '• /overtime (or <b>⏰ Overtime</b>) — View students past their shift end\n' +
+    '• /menu — Open the admin menu\n' +
+    '• /live — View current occupancy\n' +
+    '• /pending — Review pending registrations\n' +
+    '• /unpaid — Review unpaid fees\n' +
+    '• /overtime — View students past their shift end\n' +
     '• /help — Show this help message\n' +
     '• /myid — Show your Telegram chat ID\n\n' +
     '<i>Tap the buttons below for quick access.</i>';
@@ -111,79 +128,118 @@ export async function handleHelp(
   await sendReply(chatId, text, ADMIN_KEYBOARD_ROWS, 'HTML');
 }
 
+export async function handleAdminMenu(
+  chatId: string,
+  sendReply: typeof sendReplyKeyboard = sendReplyKeyboard
+): Promise<void> {
+  await sendReply(chatId, 'Library admin control panel:', ADMIN_KEYBOARD_ROWS);
+}
+
 /**
  * /live command handler:
- * Shows students currently studying, capacity from active seats,
- * grouped by shift with time left in Asia/Kolkata timezone,
- * split into chunks under 4096 chars.
+ * Shows occupancy counts and checked-in students with time remaining.
  */
 export async function handleLive(
   chatId: string,
-  sendReply: typeof sendReplyKeyboard = sendReplyKeyboard,
   sendMsg: typeof sendMessageHtml = sendMessageHtml
 ): Promise<void> {
   const now = new Date();
 
-  const [totalSeatsCount, activeSessions] = await Promise.all([
-    Seat.countDocuments({ isActive: true }),
+  const [inactiveSeats, activeSessions] = await Promise.all([
+    Seat.find({ number: { $gte: 1, $lte: TOTAL_SEATS }, isActive: false }).select('number').lean(),
     Session.find({ status: 'active' })
       .populate<{ student: { name: string } }>('student', 'name')
       .populate<{ seat: { number: number } }>('seat', 'number')
       .sort({ shiftEndsAt: 1 }),
   ]);
 
-  const capacity = totalSeatsCount || 70;
+  const capacity = TOTAL_SEATS - new Set(inactiveSeats.map((seat) => seat.number)).size;
   const count = activeSessions.length;
+  const overtimeCount = activeSessions.filter((session) => session.shiftEndsAt < now).length;
+  const freeSeats = Math.max(0, capacity - count);
+  const lines = activeSessions.map((session) => {
+    const name = escapeHtml(session.student?.name || 'Unknown');
+    const seatNumber = session.seat?.number ?? '?';
+    const minutes = Math.floor((session.shiftEndsAt.getTime() - now.getTime()) / 60000);
+    const timeLeft = minutes < 0 ? `${Math.abs(minutes)}m overtime` : `${formatDuration(minutes)} left`;
+    return `• Seat ${seatNumber} · ${name} · ${timeLeft}`;
+  });
+  const text = [
+    '<b>Live Study Status</b>',
+    `Checked in: ${count} · Overtime: ${overtimeCount} · Free: ${freeSeats}`,
+    '',
+    ...(lines.length ? lines : ['No students are checked in.']),
+  ].join('\n');
+  await sendMsg(chatId, text, [[{ text: '🔄 Refresh', callback_data: callbackData('live_refresh', '0') }]]);
+}
 
-  if (count === 0) {
-    const text = `📊 <b>Live Study Status</b> (0 / ${capacity})\n\nNo students are currently studying.`;
-    await sendReply(chatId, text, ADMIN_KEYBOARD_ROWS, 'HTML');
+export async function handlePending(
+  chatId: string,
+  sendMsg: typeof sendMessageHtml = sendMessageHtml
+): Promise<void> {
+  const students = await User.find({
+    role: 'student',
+    status: 'pending',
+    isDeleted: false,
+  }).sort({ createdAt: -1 }).limit(25);
+
+  if (students.length === 0) {
+    await sendMsg(chatId, '📝 <b>Pending requests</b>\n\nNo pending registrations.');
     return;
   }
 
-  // Group by shiftHours
-  const shiftsMap = new Map<number, Array<(typeof activeSessions)[0]>>();
-  for (const session of activeSessions) {
-    const hours = session.shiftHours || 4;
-    const existing = shiftsMap.get(hours) || [];
-    existing.push(session);
-    shiftsMap.set(hours, existing);
+  for (const student of students) {
+    const text =
+      `📝 <b>${escapeHtml(student.name)}</b>\n` +
+      `Phone: ${escapeHtml(student.phone ?? '—')}\n` +
+      `Seat: ${student.seatNumber ?? '—'} · Shift: ${student.shiftHours ?? '—'}h`;
+    await sendMsg(chatId, text, [[
+      { text: '✅ Approve', callback_data: callbackData('student_approve', student._id.toString()) },
+      { text: '❌ Reject', callback_data: callbackData('student_reject', student._id.toString()) },
+    ]]);
+  }
+}
+
+export async function handleUnpaidFees(
+  chatId: string,
+  sendMsg: typeof sendMessageHtml = sendMessageHtml
+): Promise<void> {
+  const months = [toMonthString(new Date()), previousMonthString()];
+  const [fees, summaries] = await Promise.all([
+    Fee.find({ status: 'unpaid', month: { $in: months } })
+      .sort({ month: -1, createdAt: -1 })
+      .limit(25)
+      .populate<{ student: { _id: mongoose.Types.ObjectId; name: string; phone?: string } }>(
+        'student',
+        'name phone'
+      ),
+    Fee.aggregate<{ total: number; count: number }>([
+      { $match: { status: 'unpaid', month: { $in: months } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+  ]);
+  const summary = summaries[0] ?? { total: 0, count: 0 };
+
+  if (summary.count === 0) {
+    await sendMsg(chatId, `💰 <b>Unpaid fees</b>\n\nNo unpaid fees for ${months.join(' or ')}.`);
+    return;
   }
 
-  // Sort shifts numerically (e.g. 4h, 12h, 24h)
-  const sortedShifts = Array.from(shiftsMap.keys()).sort((a, b) => a - b);
-
-  let fullMessage = `📊 <b>Live Study Status</b> (${count} / ${capacity})\n`;
-
-  for (const shiftHours of sortedShifts) {
-    const sessions = shiftsMap.get(shiftHours) || [];
-    fullMessage += `\n⏱ <b>${shiftHours}h Shift</b> (${sessions.length})\n`;
-
-    for (const s of sessions) {
-      const studentName = escapeHtml(s.student?.name || 'Unknown');
-      const seatNumber = s.seat?.number ?? '?';
-      const diffMs = s.shiftEndsAt.getTime() - now.getTime();
-      const diffMin = Math.floor(diffMs / 60000);
-
-      let timeStatus: string;
-      if (diffMin < 0) {
-        timeStatus = `⚠️ <b>${Math.abs(diffMin)}m over</b>`;
-      } else {
-        timeStatus = `${formatDuration(diffMin)} left`;
-      }
-
-      fullMessage += `• ${studentName} · Seat ${seatNumber} · ${timeStatus}\n`;
-    }
-  }
-
-  const chunks = splitIntoChunks(fullMessage);
-  for (let i = 0; i < chunks.length; i++) {
-    const isLast = i === chunks.length - 1;
-    if (isLast) {
-      await sendReply(chatId, chunks[i], ADMIN_KEYBOARD_ROWS, 'HTML');
-    } else {
-      await sendMsg(chatId, chunks[i]);
-    }
+  await sendMsg(
+    chatId,
+    `💰 <b>Unpaid fees</b> (${summary.count} records; showing ${fees.length})\n` +
+      `Total pending: ₹${summary.total.toLocaleString('en-IN')}`
+  );
+  for (const fee of fees) {
+    const student = fee.student;
+    const text =
+      `💰 <b>${escapeHtml(student?.name ?? 'Former student')}</b>\n` +
+      `Month: ${fee.month} · Amount: ₹${fee.amount.toLocaleString('en-IN')}\n` +
+      `Phone: ${escapeHtml(student?.phone ?? '—')}`;
+    await sendMsg(chatId, text, [[
+      { text: '✔ Mark paid', callback_data: callbackData('fee_paid', fee._id.toString()) },
+      { text: '📩 Send reminder', callback_data: callbackData('fee_remind', fee._id.toString()) },
+    ]]);
   }
 }
 
@@ -280,8 +336,8 @@ export function buildOvertimeKeyboard(opts: {
   }
 
   keyboard.push([
-    { text: '✅ Mark as sent', callback_data: `ot:sent:${sessionId}` },
-    { text: '🚪 Force checkout', callback_data: `ot:force:${sessionId}` },
+    { text: '✅ Mark as sent', callback_data: callbackData('ot_sent', sessionId) },
+    { text: '🚪 Force checkout', callback_data: callbackData('ot_force', sessionId) },
   ]);
 
   return keyboard;
@@ -389,83 +445,6 @@ export async function recordManualNotificationSent(opts: {
   };
 }
 
-// ─── Shared Business Logic: Force Checkout (Requirement 2) ───────────────────
-
-export interface ForceCheckoutResult {
-  session: ISession | null;
-  durationMinutes: number;
-  durationFormatted: string;
-  alreadyCheckedOut: boolean;
-}
-
-/**
- * Shared atomic force checkout.
- * Used by adminController.forceCheckout and Telegram bot callbacks.
- * Uses atomic findOneAndUpdate with status: 'active'.
- */
-export async function performForceCheckout(
-  sessionId: string | mongoose.Types.ObjectId,
-  options: { session?: mongoose.ClientSession; resolveAlerts?: boolean } = {}
-): Promise<ForceCheckoutResult> {
-  const now = new Date();
-
-  let activeQuery = Session.findOne({ _id: sessionId, status: 'active' });
-  if (options.session) activeQuery = activeQuery.session(options.session);
-  const session = await activeQuery;
-  if (!session) {
-    let existingQuery = Session.findById(sessionId);
-    if (options.session) existingQuery = existingQuery.session(options.session);
-    const existing = await existingQuery;
-    if (!existing) {
-      return { session: null, durationMinutes: 0, durationFormatted: '', alreadyCheckedOut: false };
-    }
-    return {
-      session: existing,
-      durationMinutes: existing.durationMinutes || 0,
-      durationFormatted: formatDuration(existing.durationMinutes || 0),
-      alreadyCheckedOut: true,
-    };
-  }
-
-  const durationMinutes = Math.max(0, diffMinutes(session.checkInAt, now));
-
-  // Atomic checkout update
-  const updated = await Session.findOneAndUpdate(
-    { _id: sessionId, status: 'active' },
-    {
-      $set: {
-        status: 'completed',
-        checkoutType: 'forced',
-        checkOutAt: now,
-        durationMinutes,
-      },
-    },
-    { new: true, ...(options.session && { session: options.session }) }
-  );
-
-  if (!updated) {
-    let currentQuery = Session.findById(sessionId);
-    if (options.session) currentQuery = currentQuery.session(options.session);
-    const current = await currentQuery;
-    return {
-      session: current ?? session,
-      durationMinutes: current?.durationMinutes ?? durationMinutes,
-      durationFormatted: formatDuration(current?.durationMinutes ?? durationMinutes),
-      alreadyCheckedOut: true,
-    };
-  }
-
-  // Free seat and resolve any overtime alerts
-  if (options.resolveAlerts !== false) await resolveOvertimeAlerts(updated._id);
-
-  return {
-    session: updated,
-    durationMinutes,
-    durationFormatted: formatDuration(durationMinutes),
-    alreadyCheckedOut: false,
-  };
-}
-
 // ─── Callback Query Dispatcher (Requirements 1, 2, 3, 8) ──────────────────────
 
 export async function handleBotCallbackQuery(
@@ -487,114 +466,201 @@ export async function handleBotCallbackQuery(
   const chatType = cbq.message?.chat?.type ?? 'private';
   const messageId = cbq.message?.message_id;
   const originalText = cbq.message?.text || '';
-  const data = cbq.data ?? '';
+  const rawData = cbq.data ?? '';
+  let answered = false;
+  const answerOnce = async (text?: string): Promise<void> => {
+    if (answered) return;
+    answered = true;
+    await answer(cbq.id, text);
+  };
 
-  // Requirement 8: Authorize callbacks by checking both callback_query.from.id and message.chat.id
-  if (chatType !== 'private' || fromId !== chatId) {
-    await answer(cbq.id, '⛔ Unauthorized.');
-    return;
-  }
-
-  const admin = await requireLinkedAdmin(fromId, 'private');
-  if (!admin) {
-    await answer(cbq.id, '⛔ Unauthorized.');
-    return;
-  }
-
-  if (!messageId) {
-    await answer(cbq.id, '⚠️ Message not found.');
-    return;
-  }
-
-  // 1. "Mark as sent" callback: ot:sent:<sessionId>
-  if (data.startsWith('ot:sent:')) {
-    const sessionId = data.slice('ot:sent:'.length);
-    const result = await recordManualNotificationSent({ sessionId, admin });
-
-    if (result.notFound) {
-      console.error(`[AdminBot] No student notification row found for session ${sessionId}.`);
-      await answer(cbq.id, '⚠️ No student alert found for this session.');
+  try {
+    if (chatType !== 'private' || fromId !== chatId) {
+      await answerOnce('⛔ Unauthorized.');
       return;
     }
 
-    if (result.alreadyMarked) {
-      const msg = `Already marked by ${result.markedBy} at ${result.markedAt}`;
-      await answer(cbq.id, msg);
-      await edit(chatId, messageId, `${originalText}\n\nℹ️ ${msg}`, []);
+    const admin = await requireLinkedAdmin(fromId, 'private');
+    if (!admin) {
+      await answerOnce('⛔ Unauthorized.');
+      return;
+    }
+    if (!messageId) {
+      await answerOnce('⚠️ Message not found.');
       return;
     }
 
-    const statusLine = `✅ Sent by ${admin.name}, ${result.markedAt}`;
-    await answer(cbq.id, 'Marked as sent.');
-    await edit(chatId, messageId, `${originalText}\n\n${statusLine}`, []);
-    return;
-  }
+    let action: string;
+    let id: string;
+    const legacy = rawData.match(/^ot:(sent|force|fok|fcancel):([^:]+)$/);
+    if (legacy) {
+      action = ({ sent: 'ot_sent', force: 'ot_force', fok: 'ot_checkout_yes', fcancel: 'ot_checkout_no' } as const)[
+        legacy[1] as 'sent' | 'force' | 'fok' | 'fcancel'
+      ];
+      id = legacy[2];
+    } else {
+      const match = rawData.match(/^([a-z_]+):([A-Za-z0-9_-]+)$/);
+      if (!match) {
+        await answerOnce('⚠️ Unknown action.');
+        return;
+      }
+      [, action, id] = match;
+    }
 
-  // 2. "Force checkout" (Step 1: Ask "Are you sure?")
-  if (data.startsWith('ot:force:')) {
-    const sessionId = data.slice('ot:force:'.length);
+    const complete = async (answerText: string, messageText: string): Promise<void> => {
+      await answerOnce(answerText);
+      await edit(chatId, messageId, messageText, []);
+    };
 
-    // Re-check session is still active
-    const session = await Session.findOne({ _id: sessionId, status: 'active' }).populate<{ student: { name: string } }>(
-      'student',
-      'name'
-    );
-
-    if (!session) {
-      await answer(cbq.id, 'Student already checked out.');
-      await edit(chatId, messageId, `${originalText}\n\nℹ️ Student already checked out.`, []);
+    if (action === 'live_refresh' && id === '0') {
+      const refresh = async (cid: string, text: string, keyboard?: TelegramInlineKeyboard) =>
+        edit(cid, messageId, text, keyboard);
+      await handleLive(chatId, refresh);
+      await answerOnce('Updated.');
       return;
     }
 
-    const studentName = session.student?.name || 'student';
-    await answer(cbq.id);
-
-    const confirmKeyboard: TelegramInlineButton[][] = [
-      [
-        { text: '✅ Confirm', callback_data: `ot:fok:${sessionId}` },
-        { text: '❌ Cancel', callback_data: `ot:fcancel:${sessionId}` },
-      ],
-    ];
-
-    const confirmPrompt = `${originalText}\n\n🚪 Force checkout ${escapeHtml(studentName)}? Are you sure?`;
-    await edit(chatId, messageId, confirmPrompt, confirmKeyboard);
-    return;
-  }
-
-  // 3. "Force checkout" (Step 2: Confirmed)
-  if (data.startsWith('ot:fok:')) {
-    const sessionId = data.slice('ot:fok:'.length);
-
-    // Re-check session is still active & perform atomic checkout
-    const result = await performForceCheckout(sessionId);
-
-    if (result.alreadyCheckedOut) {
-      await answer(cbq.id, 'Student already checked out.');
-      await edit(chatId, messageId, `${originalText}\n\nℹ️ Student already checked out.`, []);
+    if (action === 'student_approve') {
+      const result = await updateStudentStatus(id, 'approved', config.defaultMonthlyFee, 'pending');
+      const feeWarning = config.defaultMonthlyFee === 0
+        ? '\n\n⚠️ Monthly fee is ₹0, set it on the website or no fee will be generated.'
+        : '';
+      const suffix = result.alreadyHandled
+        ? '\n\nℹ️ Already handled.'
+        : `\n\n✅ Approved by ${escapeHtml(admin.name)}.`;
+      await complete(
+        result.alreadyHandled ? 'Already handled' : 'Approved.',
+        `${originalText}${suffix}${feeWarning}`
+      );
       return;
     }
 
-    if (!result.session) {
-      await answer(cbq.id, 'Session not found.');
-      await edit(chatId, messageId, `${originalText}\n\n⚠️ Session not found.`, []);
+    if (action === 'student_reject') {
+      const student = await User.findOne({ _id: id, role: 'student', isDeleted: false });
+      if (!student || student.status !== 'pending') {
+        await complete('Already handled', `${originalText}\n\nℹ️ Already handled.`);
+        return;
+      }
+      const keyboard: TelegramInlineKeyboard = [[
+        { text: '✅ Yes, reject', callback_data: callbackData('student_reject_yes', id) },
+        { text: '↩ No', callback_data: callbackData('student_reject_no', id) },
+      ]];
+      await answerOnce('Confirm rejection.');
+      await edit(
+        chatId,
+        messageId,
+        `${originalText}\n\nReject ${escapeHtml(student.name)}?`,
+        keyboard
+      );
       return;
     }
 
-    const timeStr = format(new Date(), 'hh:mm a', { timeZone: TZ });
-    const statusLine = `🚪 Checked out by ${admin.name}, ${timeStr} (${result.durationFormatted})`;
+    if (action === 'student_reject_yes') {
+      const result = await updateStudentStatus(id, 'rejected', undefined, 'pending');
+      await complete(
+        result.alreadyHandled ? 'Already handled' : 'Rejected.',
+        `${originalText}\n\n${result.alreadyHandled ? 'ℹ️ Already handled.' : `❌ Rejected by ${escapeHtml(admin.name)}.`}`
+      );
+      return;
+    }
 
-    await answer(cbq.id, 'Force checkout completed.');
-    await edit(chatId, messageId, `${originalText}\n\n${statusLine}`, []);
-    return;
+    if (action === 'student_reject_no') {
+      await complete('Cancelled.', `${originalText}\n\nRejection cancelled.`);
+      return;
+    }
+
+    if (action === 'fee_paid') {
+      const result = await markFeePaid(id, admin._id);
+      await complete(
+        result.alreadyHandled ? 'Already handled' : 'Marked paid.',
+        `${originalText}\n\n${result.alreadyHandled ? 'ℹ️ Already handled.' : `✅ Marked paid by ${escapeHtml(admin.name)}.`}`
+      );
+      return;
+    }
+
+    if (action === 'fee_remind') {
+      await enqueueFeeReminder(id);
+      await complete('Reminder queued.', `${originalText}\n\n📩 Reminder queued.`);
+      return;
+    }
+
+    if (action === 'ot_sent') {
+      const result = await recordManualNotificationSent({ sessionId: id, admin });
+      if (result.notFound) {
+        await complete('No student alert found.', `${originalText}\n\n⚠️ No student alert found for this session.`);
+        return;
+      }
+      if (result.alreadyMarked) {
+        const msg = `Already marked by ${result.markedBy} at ${result.markedAt}`;
+        await complete(msg, `${originalText}\n\nℹ️ ${msg}`);
+        return;
+      }
+      await complete(
+        'Marked as sent.',
+        `${originalText}\n\n✅ Sent by ${escapeHtml(admin.name)}, ${result.markedAt}`
+      );
+      return;
+    }
+
+    if (action === 'ot_force') {
+      const session = await Session.findOne({ _id: id, status: 'active' })
+        .populate<{ student: { name: string } }>('student', 'name');
+      if (!session) {
+        await complete('Already handled', `${originalText}\n\nℹ️ Already handled: student checked out.`);
+        return;
+      }
+      const keyboard: TelegramInlineKeyboard = [[
+        { text: '✅ Confirm', callback_data: callbackData('ot_checkout_yes', id) },
+        { text: '❌ Cancel', callback_data: callbackData('ot_checkout_no', id) },
+      ]];
+      await answerOnce('Confirm force checkout.');
+      await edit(
+        chatId,
+        messageId,
+        `${originalText}\n\nForce checkout ${escapeHtml(session.student?.name || 'student')}? Are you sure?`,
+        keyboard
+      );
+      return;
+    }
+
+    if (action === 'ot_checkout_yes') {
+      const result = await performForceCheckout(id);
+      if (result.alreadyCheckedOut) {
+        await complete('Already handled', `${originalText}\n\nℹ️ Already handled: student checked out.`);
+        return;
+      }
+      if (!result.session) {
+        await complete('Session not found.', `${originalText}\n\n⚠️ Session not found.`);
+        return;
+      }
+      const timeStr = format(new Date(), 'hh:mm a', { timeZone: TZ });
+      await complete(
+        'Force checkout completed.',
+        `${originalText}\n\n🚪 Checked out by ${escapeHtml(admin.name)}, ${timeStr} (${result.durationFormatted})`
+      );
+      return;
+    }
+
+    if (action === 'ot_checkout_no') {
+      await complete('Cancelled.', `${originalText}\n\n❌ Cancelled by ${escapeHtml(admin.name)}.`);
+      return;
+    }
+
+    await answerOnce('⚠️ Unknown action.');
+  } catch (error) {
+    const errorStatus =
+      typeof error === 'object' && error !== null && 'statusCode' in error
+        ? Number(error.statusCode)
+        : 500;
+    const message = errorStatus < 500 && error instanceof Error
+      ? error.message
+      : 'Action failed. Please try again.';
+    await answerOnce(message.slice(0, 200));
+    if (messageId) {
+      await edit(chatId, messageId, `${originalText}\n\n⚠️ ${escapeHtml(message)}`, []);
+    }
+    throw error;
+  } finally {
+    if (!answered) await answerOnce();
   }
-
-  // 4. "Force checkout" (Step 2: Cancelled)
-  if (data.startsWith('ot:fcancel:')) {
-    await answer(cbq.id, 'Cancelled.');
-    await edit(chatId, messageId, `${originalText}\n\n❌ Cancelled by ${admin.name}.`, []);
-    return;
-  }
-
-  // Unknown callback
-  await answer(cbq.id, '⚠️ Unknown action.');
 }

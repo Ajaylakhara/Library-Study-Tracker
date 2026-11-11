@@ -65,6 +65,12 @@ const rawMongoUri = (
     : process.env.MONGODB_URI || process.env.MONGO_URI
 )?.trim();
 
+const defaultMonthlyFee = process.env.DEFAULT_MONTHLY_FEE?.trim();
+const parsedDefaultMonthlyFee = defaultMonthlyFee ? Number(defaultMonthlyFee) : 0;
+if (!Number.isFinite(parsedDefaultMonthlyFee) || parsedDefaultMonthlyFee < 0) {
+  throw new Error('DEFAULT_MONTHLY_FEE must be a non-negative number.');
+}
+
 if (!rawMongoUri) {
   throw new Error(
     process.env.NODE_ENV === 'test'
@@ -87,6 +93,7 @@ export const config = {
   },
 
   authRateLimitMax: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '20', 10),
+  defaultMonthlyFee: parsedDefaultMonthlyFee,
 
   // DEV ONLY: lets the client skip login by sending X-Dev-Role. Ignored in production.
   devAuthBypass: process.env.DEV_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
