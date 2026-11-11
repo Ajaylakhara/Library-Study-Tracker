@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { BellOff, Check, CheckCheck } from 'lucide-react';
-import { get, patch, post } from '../../store/api';
+import { useEffect, useRef, useState } from 'react';
+import { BellOff, Check, CheckCheck, MessageCircle } from 'lucide-react';
+import { del, get, patch, post } from '../../store/api';
 import { ENDPOINTS } from '../../config/endpoints';
 import { useAdminHeader, useRefreshBadges } from '../../layout/AdminLayout';
 import { useAsync } from '../../hooks/useAsync';
@@ -8,6 +8,7 @@ import { useAppDispatch } from '../../hooks/useRedux';
 import { showToast } from '../../toolkit/toastSlice';
 import { errMsg } from '../../toolkit/createAppThunk';
 import { Button } from '../../components/Button';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { StatusBadge } from '../../components/StatusBadge';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorState } from '../../components/ErrorState';
@@ -17,13 +18,175 @@ import { Pagination } from '../../components/Pagination';
 import { formatPhone } from '../../helper/formatMinutes';
 import { dateTimeLabel, NOTIFICATION_LABELS } from '../../helper/date';
 import { cn } from '../../helper/cn';
-import type { AppNotification, Pagination as P } from '../../types';
+import type { AdminTelegramLink, AdminTelegramStatus, AppNotification, Pagination as P } from '../../types';
 
 const PAGE_SIZE = 15;
 // Overtime follow-up is temporarily disabled while its delivery method is undecided.
 type Tab = 'failed' | 'all';
 
 const CHANNEL: Record<string, string> = { whatsapp: 'WhatsApp', sms: 'SMS', inapp: 'In-app' };
+
+function TelegramCard() {
+  const dispatch = useAppDispatch();
+  const [status, setStatus] = useState<AdminTelegramStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [linkCreated, setLinkCreated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const refreshStatus = async () => {
+    try {
+      const response = await get<AdminTelegramStatus>(ENDPOINTS.admin.telegramStatus);
+      setStatus(response.data);
+      setError(null);
+      if (response.data.connected) {
+        stopPolling();
+        setLinkCreated(false);
+      }
+      return response.data;
+    } catch (e) {
+      setError(errMsg(e));
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshStatus().catch(() => undefined);
+    return stopPolling;
+  }, []);
+
+  const beginStatusPolling = () => {
+    stopPolling();
+    const expiresAt = Date.now() + 2 * 60 * 1000;
+    pollRef.current = setInterval(() => {
+      if (Date.now() >= expiresAt) {
+        stopPolling();
+        return;
+      }
+      void refreshStatus().catch(() => undefined);
+    }, 5000);
+  };
+
+  const connectTelegram = async () => {
+    const telegramWindow = window.open('about:blank', '_blank');
+    if (!telegramWindow) {
+      setError('Allow pop-ups for this site, then try connecting again.');
+      return;
+    }
+    telegramWindow.opener = null;
+    setConnecting(true);
+    setError(null);
+    try {
+      const response = await post<AdminTelegramLink>(ENDPOINTS.admin.telegramLink);
+      telegramWindow.location.href = response.data.link;
+      setLinkCreated(true);
+      beginStatusPolling();
+    } catch (e) {
+      telegramWindow.close();
+      const message = errMsg(e);
+      setError(message);
+      dispatch(showToast('error', message));
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const disconnectTelegram = async () => {
+    setDisconnecting(true);
+    setError(null);
+    try {
+      await del(ENDPOINTS.admin.telegramDisconnect);
+      setConfirmDisconnect(false);
+      setLinkCreated(false);
+      stopPolling();
+      await refreshStatus();
+      dispatch(showToast('success', 'Telegram disconnected.'));
+    } catch (e) {
+      const message = errMsg(e);
+      setError(message);
+      dispatch(showToast('error', message));
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  return (
+    <>
+      <section className="glass-b flex flex-col gap-4 rounded-2xl p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <div className="glass-c flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-oxford">
+            <MessageCircle size={20} />
+          </div>
+          <div>
+            <h2 className="font-semibold text-oxford">Telegram</h2>
+            {loading ? (
+              <p className="mt-1 text-sm text-muted">Checking connection status…</p>
+            ) : status?.connected ? (
+              <p className="mt-1 flex items-center gap-2 text-sm text-free-fg">
+                <span className="h-2 w-2 rounded-full bg-free" aria-hidden />
+                Connected
+              </p>
+            ) : (
+              <div className="mt-1">
+                <p className="text-sm text-muted">Connect Telegram to receive admin alerts in your bot chat.</p>
+                {linkCreated && (
+                  <p className="mt-1 text-sm text-oxford">
+                    Press Start in Telegram. The link expires in 10 minutes.
+                  </p>
+                )}
+              </div>
+            )}
+            {error && <p className="mt-2 text-sm text-occupied-fg" role="alert">{error}</p>}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+          {status?.connected ? (
+            <Button variant="dangerOutline" size="sm" onClick={() => setConfirmDisconnect(true)}>
+              Disconnect
+            </Button>
+          ) : (
+            <Button size="sm" loading={connecting} disabled={loading} onClick={() => void connectTelegram()}>
+              Connect Telegram
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={loading || connecting || disconnecting}
+            onClick={() => {
+              setError(null);
+              void refreshStatus().catch(() => undefined);
+            }}
+          >
+            Refresh status
+          </Button>
+        </div>
+      </section>
+      <ConfirmDialog
+        open={confirmDisconnect}
+        title="Disconnect Telegram?"
+        description="You will stop receiving Telegram admin alerts until you connect again."
+        confirmLabel="Disconnect"
+        tone="danger"
+        loading={disconnecting}
+        onCancel={() => setConfirmDisconnect(false)}
+        onConfirm={() => void disconnectTelegram()}
+      />
+    </>
+  );
+}
 
 export function Component() {
   const dispatch = useAppDispatch();
@@ -166,6 +329,7 @@ export function Component() {
 
   return (
     <div className="flex flex-col gap-5">
+      <TelegramCard />
       <div className="glass-b flex flex-col gap-3 rounded-2xl p-4 md:flex-row md:items-center md:justify-between">
         <div role="tablist" aria-label="Notification view" className="glass-c flex w-fit gap-1 rounded-[10px] p-1">
           {(['failed', 'all'] as Tab[]).map((t) => {

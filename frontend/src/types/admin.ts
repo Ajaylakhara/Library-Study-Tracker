@@ -7,6 +7,16 @@ export interface Pagination {
   pages: number;
 }
 
+export interface AdminTelegramStatus {
+  connected: boolean;
+  linkedAt: string | null;
+}
+
+export interface AdminTelegramLink {
+  link: string;
+  expiresAt: string;
+}
+
 export interface LiveSeat {
   seatId: string | null;
   seatNumber: number;

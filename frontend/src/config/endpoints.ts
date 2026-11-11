@@ -22,6 +22,9 @@ export const ENDPOINTS = {
     changePin: '/me/change-pin',
   },
   admin: {
+    telegramStatus: '/admin/telegram/status',
+    telegramLink: '/admin/telegram/link',
+    telegramDisconnect: '/admin/telegram',
     liveSeats: '/admin/seats/live',
     students: '/admin/students',
     createStudent: '/admin/students',
