@@ -84,10 +84,14 @@ export const checkIn = async (req: AuthRequest, res: Response, next: NextFunctio
       throw createError('Seat is occupied or you are already checked in. Please wait or contact admin.', 409);
     }
 
-    // 2. Lookup seat by seatNumber
-    const seat = await Seat.findOne({ number: seatNumber, isActive: true });
-    if (!seat) {
-      throw createError(`Seat ${seatNumber} not found or inactive.`, 404);
+    // 2. Create any legacy missing seat record as active; preserve existing activation state.
+    const seat = await Seat.findOneAndUpdate(
+      { number: seatNumber },
+      { $setOnInsert: { number: seatNumber, isActive: true } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    if (!seat.isActive) {
+      throw createError(`Seat ${seatNumber} is inactive. Please contact an admin.`, 409);
     }
 
     // 3. Check if seat is currently occupied by another active session

@@ -202,6 +202,93 @@ describe('student seat release', () => {
     expect(assignableSeats).not.toContain(pendingSeat);
   });
 
+  it('creates a missing assigned seat as active during check-in', async () => {
+    const { student, seatNumber } = await createStudent();
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ phone: student.phone, pin: '654321' });
+    const studentCookie = login.headers['set-cookie']?.[0] ?? '';
+    expect(studentCookie).toBeTruthy();
+
+    await Seat.deleteOne({ number: seatNumber });
+
+    try {
+      const response = await request(app)
+        .post('/api/me/checkin')
+        .set('Cookie', studentCookie)
+        .send({ seat: seatNumber, shiftHours: 4 });
+
+      expect(response.status).toBe(201);
+      const seat = await Seat.findOne({ number: seatNumber });
+      expect(seat?.isActive).toBe(true);
+      expect(await Session.exists({ student: student._id, seat: seat?._id, status: 'active' })).toBeTruthy();
+    } finally {
+      await ensureSeats();
+    }
+  });
+
+  it('rejects check-in with a clear message when the assigned seat is inactive', async () => {
+    const { student, seatNumber } = await createStudent();
+    const seat = await Seat.findOne({ number: seatNumber });
+    if (!seat) throw new Error(`Test seat ${seatNumber} was not seeded.`);
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ phone: student.phone, pin: '654321' });
+    const studentCookie = login.headers['set-cookie']?.[0] ?? '';
+    expect(studentCookie).toBeTruthy();
+    await Seat.updateOne({ _id: seat._id }, { $set: { isActive: false } });
+
+    try {
+      const response = await request(app)
+        .post('/api/me/checkin')
+        .set('Cookie', studentCookie)
+        .send({ seat: seatNumber, shiftHours: 4 });
+
+      expect(response.status).toBe(409);
+      expect(response.body.message).toBe(`Seat ${seatNumber} is inactive. Please contact an admin.`);
+      expect(await Session.exists({ student: student._id, status: 'active' })).toBeFalsy();
+    } finally {
+      await Seat.updateOne({ _id: seat._id }, { $set: { isActive: true } });
+    }
+  });
+
+  it('saves an admin seat and shift change and uses it on the student’s next check-in', async () => {
+    const { student, seatNumber: previousSeat } = await createStudent();
+    const studentCookie = (await request(app)
+      .post('/api/auth/login')
+      .send({ phone: student.phone, pin: '654321' })).headers['set-cookie']?.[0] ?? '';
+    expect(studentCookie).toBeTruthy();
+
+    const availableSeats = await getAssignableSeatNumbers(student._id);
+    const nextSeat = availableSeats.find((number) => number !== previousSeat);
+    if (nextSeat === undefined) throw new Error('No alternate test seat is available.');
+
+    const edited = await request(app)
+      .patch(`/api/admin/students/${student._id}`)
+      .set('Cookie', adminCookie)
+      .send({ seatNumber: nextSeat, shiftHours: 12 });
+
+    expect(edited.status).toBe(200);
+    expect(edited.body.data.seatNumber).toBe(nextSeat);
+    expect(edited.body.data.shiftHours).toBe(12);
+    expect((await User.findById(student._id))?.seatNumber).toBe(nextSeat);
+    expect((await User.findById(student._id))?.shiftHours).toBe(12);
+
+    const status = await request(app)
+      .get('/api/me/status')
+      .set('Cookie', studentCookie);
+    expect(status.body.data.student.seatNumber).toBe(nextSeat);
+    expect(status.body.data.student.shiftHours).toBe(12);
+
+    const checkedIn = await request(app)
+      .post('/api/me/checkin')
+      .set('Cookie', studentCookie)
+      .send({ seat: nextSeat, shiftHours: 12 });
+    expect(checkedIn.status).toBe(201);
+    expect(checkedIn.body.data.seatNumber).toBe(nextSeat);
+    expect(checkedIn.body.data.shiftHours).toBe(12);
+  });
+
   it('makes a deleted student’s seat available again', async () => {
     const { student, seatNumber } = await createStudent();
     const before = await request(app).get('/api/auth/seats/available');

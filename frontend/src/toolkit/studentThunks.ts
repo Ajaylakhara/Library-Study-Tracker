@@ -1,13 +1,21 @@
 import { createAppThunk, errMsg } from './createAppThunk';
 import { get, post } from '../store/api';
 import { ENDPOINTS } from '../config/endpoints';
-import type { ActiveSession, CheckOutResult, LastStudy } from '../types';
+import type { ActiveSession, AuthUser, CheckOutResult, LastStudy } from '../types';
 import { showToast } from './toastSlice';
 import { formatMinutes } from '../helper/formatMinutes';
+import { userUpdated } from './authSlice';
 
-export const fetchStatus = createAppThunk('student/fetchStatus', async (_, { rejectWithValue }) => {
+export const fetchStatus = createAppThunk('student/fetchStatus', async (_, { dispatch, rejectWithValue }) => {
   try {
-    const res = await get<{ activeSession: ActiveSession | null }>(ENDPOINTS.student.status);
+    const res = await get<{
+      student: Pick<AuthUser, 'seatNumber' | 'shiftHours'>;
+      activeSession: ActiveSession | null;
+    }>(ENDPOINTS.student.status);
+    dispatch(userUpdated({
+      seatNumber: res.data.student.seatNumber ?? undefined,
+      shiftHours: res.data.student.shiftHours ?? undefined,
+    }));
     return res.data.activeSession;
   } catch (e) {
     return rejectWithValue(errMsg(e));
