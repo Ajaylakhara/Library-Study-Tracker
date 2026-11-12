@@ -80,6 +80,14 @@ Creates 70 seats and one admin account. Safe to run multiple times.
 npm run seed
 ```
 
+To update the admin phone and PIN without putting credentials in a file, run this from `backend/`:
+
+```bash
+npm run admin:update -- --phone 9876543210 --pin 482913 [--old-phone 9000000000]
+```
+
+If `--old-phone` is omitted, there must be exactly one active admin. Existing admin JWT sessions remain valid until they expire (one day).
+
 ### 3. Run Development Server
 
 ```bash
