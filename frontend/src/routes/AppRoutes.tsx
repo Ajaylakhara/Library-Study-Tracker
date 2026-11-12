@@ -1,10 +1,58 @@
-import { createBrowserRouter, Navigate, Outlet, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } from 'react-router-dom';
 import { useBootstrap, ProtectedRoute, homeFor } from '../components/ProtectedRoute';
 import { RouteError } from '../components/ErrorBoundary';
 import { PageLoader } from '../components/Spinner';
 import { StudentLayout } from '../layout/StudentLayout';
 import { AdminLayout } from '../layout/AdminLayout';
 import { useAppSelector } from '../hooks/useRedux';
+import { useEffect } from 'react';
+
+const PAGE_TITLES: Record<string, string> = {
+  '/login': 'Sign in',
+  '/register': 'Register',
+  '/home': 'Home',
+  '/attendance': 'Attendance',
+  '/summary': 'Summary',
+  '/fees': 'Fees',
+  '/profile': 'Profile',
+  '/admin': 'Dashboard',
+  '/admin/seats': 'Seat monitor',
+  '/admin/students': 'Students',
+  '/admin/sessions': 'Sessions',
+  '/admin/fees': 'Fees',
+  '/admin/reports': 'Reports',
+  '/admin/alerts': 'Alerts',
+  '/admin/account': 'Account',
+};
+
+function BrandingMetadata() {
+  const { pathname } = useLocation();
+  const branding = useAppSelector((state) => state.branding.settings);
+
+  useEffect(() => {
+    const pageTitle = PAGE_TITLES[pathname] ?? (pathname === '/' ? 'Home' : 'Not found');
+    document.title = `${pageTitle} · ${branding.libraryName}`;
+    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (description) description.content = branding.tagline || branding.libraryName;
+
+    let favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement('link');
+      favicon.rel = 'icon';
+      document.head.appendChild(favicon);
+    }
+
+    const href = branding.favicon || branding.logo || '/favicon.svg';
+    favicon.href = href;
+    favicon.type = href.startsWith('data:')
+      ? href.slice(5, href.indexOf(';'))
+      : href.endsWith('.svg')
+        ? 'image/svg+xml'
+        : '';
+  }, [branding.favicon, branding.libraryName, branding.logo, pathname]);
+
+  return <Outlet />;
+}
 
 export function PublicOnlyRoute() {
   const ready = useBootstrap();
@@ -23,6 +71,7 @@ export function RootRedirect() {
 
 export const router = createBrowserRouter([
   {
+    element: <BrandingMetadata />,
     errorElement: <RouteError />,
     hydrateFallbackElement: <PageLoader />,
     children: [

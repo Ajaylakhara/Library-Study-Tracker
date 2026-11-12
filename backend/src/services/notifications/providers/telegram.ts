@@ -13,6 +13,18 @@
  */
 
 import { config } from '../../../config';
+import { getLibraryNameOrDefault } from '../../librarySettings';
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function brandMessage(text: string, html: boolean): Promise<string> {
+  const libraryName = await getLibraryNameOrDefault();
+  const alreadyBranded = text.startsWith(`${libraryName}\n`);
+  const prefix = html ? `<b>${escapeHtml(libraryName)}</b>\n` : `${libraryName}\n`;
+  return alreadyBranded ? text : `${prefix}${text}`;
+}
 
 // ─── Button types ─────────────────────────────────────────────────────────────
 
@@ -209,6 +221,7 @@ export async function sendMessage(
   text: string,
   keyboard?: TelegramInlineKeyboard
 ): Promise<TelegramSendResult> {
+  text = await brandMessage(text, false);
   const body: Record<string, unknown> = { chat_id: chatId, text };
   if (keyboard && keyboard.length > 0) {
     const replyMarkup = buildInlineKeyboard(keyboard);
@@ -227,6 +240,7 @@ export async function sendMessageHtml(
   text: string,
   keyboard?: TelegramInlineKeyboard
 ): Promise<TelegramSendResult> {
+  text = await brandMessage(text, true);
   const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'HTML' };
   if (keyboard && keyboard.length > 0) {
     const replyMarkup = buildInlineKeyboard(keyboard);
@@ -245,6 +259,7 @@ export async function sendReplyKeyboard(
   keyboardRows: string[][],
   parseMode?: 'HTML'
 ): Promise<TelegramSendResult> {
+  text = await brandMessage(text, parseMode === 'HTML');
   const body: Record<string, unknown> = {
     chat_id: chatId,
     text,
@@ -288,6 +303,7 @@ export async function editMessageText(
   text: string,
   keyboard?: TelegramInlineKeyboard
 ): Promise<TelegramSendResult> {
+  text = await brandMessage(text, true);
   const body: Record<string, unknown> = {
     chat_id: chatId,
     message_id: messageId,

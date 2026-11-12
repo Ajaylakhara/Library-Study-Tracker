@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { clock, dateLabel } from '../helper/date';
+import { useAppSelector } from '../hooks/useRedux';
 
 /**
  * Shared glass auth shell. The split variant is used for phone/PIN login;
@@ -32,6 +33,7 @@ function Ambient() {
 /* ── Split (Admin Login) ──────────────────────────────────────────── */
 function SplitLayout({ children }: { children: ReactNode }) {
   const [now, setNow] = useState(() => new Date());
+  const branding = useAppSelector((state) => state.branding.settings);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000);
@@ -44,6 +46,10 @@ function SplitLayout({ children }: { children: ReactNode }) {
 
       <header className="auth-login-topbar">
         <span className="auth-login-status">Secure sign in</span>
+        <div className="auth-login-compact-brand">
+          <img src={branding.logo || '/brand/logo-icon.png'} alt="" />
+          <span>{branding.shortName || branding.libraryName}</span>
+        </div>
         <div className="auth-login-clock">
           <div>{clock(now)}</div>
           <span>{dateLabel(now)}</span>
@@ -60,15 +66,15 @@ function SplitLayout({ children }: { children: ReactNode }) {
       >
         {/* Left: brand panel */}
         <section
-          aria-label="Library Study Tracker"
+          aria-label={branding.libraryName}
           style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 22, animation: 'authFadeUp .5s cubic-bezier(.2,.7,.2,1) both' }}
         >
           <div className="auth-login-brand-icon">
-            <img src="/brand/logo-icon.png" alt="" />
+            <img src={branding.logo || '/brand/logo-icon.png'} alt="" />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <h1 style={{ margin: 0, fontFamily: "'Source Serif 4', Georgia, serif", fontWeight: 700, fontSize: 42, lineHeight: 1.08, color: '#032755', letterSpacing: '-0.01em' }}>
-              Library Study Tracker
+              {branding.libraryName}
             </h1>
             <div style={{ fontSize: 13, letterSpacing: '0.32em', textTransform: 'uppercase', color: '#3D4D63', paddingLeft: '0.32em' }}>Library Portal</div>
           </div>
@@ -92,7 +98,7 @@ function SplitLayout({ children }: { children: ReactNode }) {
             ))}
           </ul>
           <div aria-hidden="true" className="auth-login-tagline">
-            <span>Learn · Focus · Grow</span>
+            <span>{branding.tagline}</span>
             <i />
           </div>
         </section>
@@ -112,6 +118,7 @@ function SplitLayout({ children }: { children: ReactNode }) {
         @media (max-width: 860px) {
           .auth-login-topbar { top: 12px !important; right: 16px !important; }
           .auth-login-status { display: none !important; }
+          .auth-login-compact-brand { display: flex !important; }
           .auth-split-main { grid-template-columns: 1fr !important; gap: 24px !important; padding: 78px 20px 32px !important; }
           .auth-split-main > section:first-child { display: none !important; }
           .auth-split-main > section:last-child { padding: 30px 22px !important; }
@@ -127,6 +134,10 @@ function SplitLayout({ children }: { children: ReactNode }) {
           .auth-login-tagline { display: none !important; }
           .auth-split-main > section:last-child { padding: 30px !important; }
         }
+      `}</style>
+      <style>{`
+        .auth-login-compact-brand { display: none; align-items: center; gap: 7px; color: #032755; font-weight: 600; }
+        .auth-login-compact-brand img { width: 24px; height: 24px; object-fit: contain; border-radius: 5px; }
       `}</style>
     </div>
   );

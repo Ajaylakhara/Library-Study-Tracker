@@ -419,7 +419,7 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         { message: { text: '/menu', chat: { id: linkedAdminChatId, type: 'private' } } },
         async (_cid, text) => { sent.push(text); }
       );
-      expect(sent).toContain('Library admin control panel:');
+      expect(sent).toContain('Admin control panel:');
       expect(ADMIN_KEYBOARD_ROWS).toEqual([
         ['👥 Live seats', '⏱ Overtime'],
         ['📝 Pending requests', '💰 Unpaid fees'],

@@ -14,6 +14,7 @@ export function Component() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const { submitting, error } = useAppSelector((s) => s.auth);
+  const branding = useAppSelector((s) => s.branding.settings);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -201,7 +202,7 @@ export function Component() {
       <div style={{ position: 'relative', zIndex: 1, maxWidth: '440px', margin: '0 auto', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
         <main style={{ padding: '40px 16px', display: 'flex', flexDirection: 'column', gap: '20px', animation: 'rise .4s both' }}>
           {/* Header Brand */}
-          <section aria-label="Library Study Tracker" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <section aria-label={branding.libraryName} style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div
               style={{
                 width: '60px',
@@ -215,13 +216,11 @@ export function Component() {
                 boxShadow: '0 12px 24px -12px rgba(3,39,85,0.55)',
               }}
             >
-              <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '12px', lineHeight: 1.15, color: '#DDE1E6', textAlign: 'center' }}>
-                LMS<br />icon
-              </span>
+              <img src={branding.logo || '/brand/logo-icon.png'} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
             <div>
               <div style={{ fontFamily: "'Source Serif 4', Georgia, serif", fontSize: '24px', fontWeight: 700, color: '#032755', lineHeight: 1.1 }}>
-                Library Study Tracker
+                {branding.libraryName}
               </div>
               <div style={{ fontSize: '12.5px', letterSpacing: '.26em', textTransform: 'uppercase', color: '#3D4D63' }}>
                 Student Portal

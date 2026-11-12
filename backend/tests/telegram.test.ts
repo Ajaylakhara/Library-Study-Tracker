@@ -159,7 +159,7 @@ describe('Telegram linking', () => {
     expect(linkedAdmin?.telegramLinkedAt).toBeInstanceOf(Date);
     expect(linkedAdmin?.telegramLinkCodeHash).toBeUndefined();
     expect(linkedAdmin?.telegramLinkExpires).toBeUndefined();
-    expect(sent[0]).toContain('Connected. You will now receive library alerts here.');
+    expect(sent[0]).toContain('Connected. You will now receive alerts here.');
 
     const status = await request(app)
       .get('/api/admin/telegram/status')
@@ -243,7 +243,7 @@ describe('Telegram linking', () => {
       }
     );
     expect(replies).toEqual([
-      'Open the library web app and press Connect Telegram to link this chat.',
+      'Open the web app and press Connect Telegram to link this chat.',
     ]);
   });
 

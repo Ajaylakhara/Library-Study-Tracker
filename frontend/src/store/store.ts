@@ -4,6 +4,8 @@ import studentReducer from '../toolkit/studentSlice';
 import adminReducer from '../toolkit/adminSlice';
 import toastReducer, { showToast } from '../toolkit/toastSlice';
 import { setUnauthorizedHandler } from './api';
+import brandingReducer from '../toolkit/brandingSlice';
+import { loadBranding } from '../toolkit/brandingThunks';
 
 export const store = configureStore({
   reducer: {
@@ -11,6 +13,7 @@ export const store = configureStore({
     student: studentReducer,
     admin: adminReducer,
     toast: toastReducer,
+    branding: brandingReducer,
   },
 });
 
@@ -24,3 +27,5 @@ setUnauthorizedHandler(() => {
     store.dispatch(showToast('error', 'Session expired. Please log in again.'));
   }
 });
+
+void store.dispatch(loadBranding());

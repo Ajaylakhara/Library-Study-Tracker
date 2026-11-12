@@ -46,9 +46,9 @@ const telegramUpdateSchema = z.object({
 }).passthrough();
 
 const CODE_EXPIRED_MESSAGE = 'This link is wrong or expired. Create a new one in the app.';
-const ADMIN_CONNECTED_MESSAGE = 'Connected. You will now receive library alerts here.';
+const ADMIN_CONNECTED_MESSAGE = 'Connected. You will now receive alerts here.';
 const STUDENT_CONNECTED_MESSAGE = 'Connected. You will get reminders here.';
-const START_MESSAGE = 'Open the library web app and press Connect Telegram to link this chat.';
+const START_MESSAGE = 'Open the web app and press Connect Telegram to link this chat.';
 
 export async function handleTelegramUpdate(
   update: unknown,

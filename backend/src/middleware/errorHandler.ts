@@ -49,7 +49,7 @@ export function errorHandler(
     return;
   }
 
-  const statusCode = err.statusCode ?? 500;
+  const statusCode = err.statusCode ?? (err as AppError & { status?: number }).status ?? 500;
   const message =
     statusCode >= 500 && !isDev ? 'Something went wrong. Please try again.' : err.message;
 

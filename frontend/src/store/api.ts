@@ -95,6 +95,7 @@ export async function http<T = unknown>(
 export const get = <T>(path: string, query?: Query) => http<T>('GET', path, undefined, query);
 export const post = <T>(path: string, body?: Record<string, unknown>) => http<T>('POST', path, body ?? {});
 export const patch = <T>(path: string, body: Record<string, unknown>) => http<T>('PATCH', path, body);
+export const put = <T>(path: string, body: Record<string, unknown>) => http<T>('PUT', path, body);
 export const del = <T>(path: string) => http<T>('DELETE', path);
 
 export async function downloadFile(

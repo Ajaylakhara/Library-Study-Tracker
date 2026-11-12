@@ -7,6 +7,7 @@ import {
 } from '../../models/Notification';
 import { User, IUser } from '../../models/User';
 import { templates } from './templates';
+import { getLibraryNameOrDefault } from '../librarySettings';
 
 export interface EnqueueOptions {
   userId: mongoose.Types.ObjectId | string;
@@ -46,11 +47,12 @@ export class NotificationService {
     const phoneSnap =
       studentPhoneSnapshot ??
       (user.role === 'student' ? user.phone ?? null : (vars.studentPhone ? String(vars.studentPhone) : null));
-    const message = opts.message ?? templates[type].buildMessage(vars);
+    const brandedVars = { ...vars, libraryName: vars.libraryName ?? await getLibraryNameOrDefault() };
+    const message = opts.message ?? templates[type].buildMessage(brandedVars);
     const baseDoc = {
       user: new mongoose.Types.ObjectId(userId),
       type,
-      vars,
+      vars: brandedVars,
       message,
       sessionId: sessionId ? new mongoose.Types.ObjectId(sessionId) : null,
       feeId: feeId ? new mongoose.Types.ObjectId(feeId) : null,
@@ -198,12 +200,13 @@ export class NotificationService {
       channel,
       status,
     } = opts;
+    const brandedVars = { ...vars, libraryName: vars.libraryName ?? await getLibraryNameOrDefault() };
     try {
       await Notification.create({
         user: new mongoose.Types.ObjectId(userId),
         type,
-        vars,
-        message: opts.message ?? templates[type].buildMessage(vars),
+        vars: brandedVars,
+        message: opts.message ?? templates[type].buildMessage(brandedVars),
         sessionId: sessionId ? new mongoose.Types.ObjectId(sessionId) : null,
         feeId: feeId ? new mongoose.Types.ObjectId(feeId) : null,
         studentNameSnapshot,

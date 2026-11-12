@@ -14,6 +14,7 @@ export function StudentLayout() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const user = useAppSelector((s) => s.auth.user);
+  const branding = useAppSelector((s) => s.branding.settings);
 
   const activeTab = TABS.find((t) => pathname.startsWith(t.to)) ?? TABS[0];
   const userInitials = initials(user?.name ?? 'AS');
@@ -110,20 +111,17 @@ export function StudentLayout() {
               boxShadow: '0 8px 16px -8px rgba(3,39,85,0.4)',
             }}
           >
-            <span
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: '11px',
-                color: '#DDE1E6',
-                textAlign: 'center',
-                lineHeight: 1.1,
-              }}
-            >
-              LMS<br />icon
-            </span>
+            <img
+              src={branding.logo || '/brand/logo-icon.png'}
+              alt=""
+              style={{ width: '100%', height: '100%', borderRadius: 'inherit', objectFit: 'contain', padding: branding.logo ? '4px' : '0' }}
+            />
           </div>
 
           <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '11px', fontWeight: 600, color: '#5A6A7F', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {branding.libraryName}
+            </div>
             <div
               style={{
                 fontFamily: "'Source Serif 4', Georgia, serif",

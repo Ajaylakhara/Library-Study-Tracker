@@ -3,6 +3,11 @@
  */
 
 export const ENDPOINTS = {
+  settings: {
+    public: '/settings/public',
+    admin: '/admin/settings',
+    adminProfile: '/admin/account/profile',
+  },
   auth: {
     login: '/auth/login',
     register: '/auth/register',

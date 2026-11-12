@@ -37,6 +37,7 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
   const dispatch    = useAppDispatch();
   const navigate    = useNavigate();
   const user        = useAppSelector((s) => s.auth.user);
+  const branding    = useAppSelector((s) => s.branding.settings);
   const { badges }  = useContext(BadgeCtx);
   const [confirm, setConfirm] = useState(false);
   const [busy,    setBusy]    = useState(false);
@@ -66,10 +67,15 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
       {/* Brand header */}
       <div style={{ position: 'relative', padding: compact ? '18px 10px' : '22px 16px 14px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px' }}>
         <img
-          src={compact ? '/brand/logo-icon.png' : '/brand/logo-full.png'}
-          alt={compact ? '' : 'Library Study Tracker — Admin Console'}
-          style={{ width: compact ? '44px' : '222px', height: compact ? '44px' : 'auto', flex: '0 0 auto', objectFit: 'contain', display: 'block' }}
+          src={branding.logo || '/brand/logo-icon.png'}
+          alt={compact ? branding.shortName : ''}
+          style={{ width: '44px', height: '44px', flex: '0 0 auto', objectFit: 'contain', display: 'block', borderRadius: '10px' }}
         />
+        {!compact && (
+          <span style={{ color: '#FDFDFD', fontFamily: "'Source Serif 4', Georgia, serif", fontSize: '17px', fontWeight: 600, lineHeight: 1.15, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {branding.libraryName}
+          </span>
+        )}
       </div>
 
       {/* Nav items */}

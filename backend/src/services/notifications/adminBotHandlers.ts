@@ -141,7 +141,7 @@ export async function handleHelp(
   sendMsg: typeof sendMessageHtml = sendMessageHtml
 ): Promise<void> {
   const text =
-    '📚 <b>Library Admin Bot Help</b>\n\n' +
+    '📚 <b>Admin Bot Help</b>\n\n' +
     'Available commands:\n' +
     '• /menu — Open the admin menu\n' +
     '• /live — View current occupancy\n' +
@@ -162,7 +162,7 @@ export async function handleAdminMenu(
   sendReply: typeof sendReplyKeyboard = sendReplyKeyboard
 ): Promise<void> {
   await sendReply(chatId, 'Admin shortcuts are available on your keyboard:', ADMIN_KEYBOARD_ROWS);
-  await sendMsg(chatId, '<b>Library admin control panel</b>', menuInlineKeyboard());
+  await sendMsg(chatId, '<b>Admin control panel</b>', menuInlineKeyboard());
 }
 
 /**
@@ -546,7 +546,7 @@ export async function handleBotCallbackQuery(
     };
 
     if (action === 'menu' && id === '0') {
-      await complete('Admin menu.', '<b>Library admin control panel</b>', menuInlineKeyboard());
+      await complete('Admin menu.', '<b>Admin control panel</b>', menuInlineKeyboard());
       return;
     }
 

@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { changeAdminPhone, changeAdminPin } from '../controllers/adminAccountController';
+import { getAdminSettings, putAdminSettings, updateAdminDisplayName } from '../controllers/settingsController';
 import {
   createAdminTelegramLink,
   deleteAdminTelegramLink,
@@ -51,6 +52,13 @@ const accountChangeLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+const settingsUpdateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: 'Too many settings updates. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // All admin routes require admin role
 router.use(authenticate, requireAdmin);
@@ -58,6 +66,9 @@ router.use(authenticate, requireAdmin);
 // Account security
 router.post('/account/change-pin', accountChangeLimiter, asyncHandler(changeAdminPin));
 router.post('/account/change-phone', accountChangeLimiter, asyncHandler(changeAdminPhone));
+router.patch('/account/profile', asyncHandler(updateAdminDisplayName));
+router.get('/settings', asyncHandler(getAdminSettings));
+router.put('/settings', settingsUpdateLimiter, asyncHandler(putAdminSettings));
 
 // Telegram
 router.post('/telegram/link', asyncHandler(createAdminTelegramLink));

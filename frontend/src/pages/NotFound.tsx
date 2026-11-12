@@ -3,8 +3,11 @@ import { useAppSelector } from '../hooks/useRedux';
 
 export function Component() {
   const user = useAppSelector((s) => s.auth.user);
+  const branding = useAppSelector((s) => s.branding.settings);
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-ivory px-6 text-center">
+      <img src={branding.logo || '/brand/logo-icon.png'} alt={branding.libraryName} style={{ maxWidth: 180, maxHeight: 72, objectFit: 'contain' }} />
+      <div className="font-semibold text-oxford">{branding.libraryName}</div>
       <div className="font-serif text-7xl font-semibold text-gold-dark">404</div>
       <h1 className="font-serif text-3xl font-semibold">This page isn't on the shelf</h1>
       <p className="max-w-sm text-muted">The link may be old or mistyped.</p>

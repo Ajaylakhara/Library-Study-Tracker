@@ -10,6 +10,7 @@ import authRoutes from './routes/authRoutes';
 import studentRoutes from './routes/studentRoutes';
 import adminRoutes from './routes/adminRoutes';
 import telegramRoutes from './routes/telegramRoutes';
+import settingsRoutes from './routes/settingsRoutes';
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use(
 );
 
 // ─── Body Parsing ────────────────────────────────────────────────────────────
+app.use('/api/admin/settings', express.json({ limit: '700kb' }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
@@ -88,6 +90,7 @@ app.use('/api', (req, _res, next) => {
   connectDB().then(() => next(), next);
 });
 app.use('/api/auth', authRoutes);
+app.use('/api/settings', settingsRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/me', studentRoutes);
 app.use('/api/admin', adminRoutes);
