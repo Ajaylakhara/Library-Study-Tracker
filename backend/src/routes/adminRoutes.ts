@@ -5,6 +5,12 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { changeAdminPhone, changeAdminPin } from '../controllers/adminAccountController';
 import { getAdminSettings, putAdminSettings, updateAdminDisplayName } from '../controllers/settingsController';
 import {
+  getSmsReminderAction,
+  markFeeReminderSent,
+  prepareFeeReminder,
+  sendFeeReminder,
+} from '../controllers/feeReminderController';
+import {
   createAdminTelegramLink,
   deleteAdminTelegramLink,
   getAdminTelegramStatus,
@@ -59,6 +65,13 @@ const settingsUpdateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+const feeReminderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: { success: false, message: 'Too many reminder actions. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // All admin routes require admin role
 router.use(authenticate, requireAdmin);
@@ -69,6 +82,8 @@ router.post('/account/change-phone', accountChangeLimiter, asyncHandler(changeAd
 router.patch('/account/profile', asyncHandler(updateAdminDisplayName));
 router.get('/settings', asyncHandler(getAdminSettings));
 router.put('/settings', settingsUpdateLimiter, asyncHandler(putAdminSettings));
+router.get('/notifications/sms-action/:token', feeReminderLimiter, asyncHandler(getSmsReminderAction));
+router.post('/notifications/:id/mark-sent', feeReminderLimiter, asyncHandler(markFeeReminderSent));
 
 // Telegram
 router.post('/telegram/link', asyncHandler(createAdminTelegramLink));
@@ -99,6 +114,8 @@ router.post('/sessions/:id/force-checkout', asyncHandler(forceCheckout));
 // Fees
 router.get('/fees', asyncHandler(getFees));
 router.patch('/fees/:id/pay', asyncHandler(markFeePaid));
+router.post('/fees/:feeId/reminder/prepare', feeReminderLimiter, asyncHandler(prepareFeeReminder));
+router.post('/fees/:feeId/reminder/send', feeReminderLimiter, asyncHandler(sendFeeReminder));
 router.post('/fees/generate', asyncHandler(generateFeesManual));
 
 // Reports

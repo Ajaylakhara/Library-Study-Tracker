@@ -72,6 +72,36 @@ export interface AdminFee {
   status: 'paid' | 'unpaid';
   paidAt: string | null;
   note?: string;
+  lastReminderAt?: string | null;
+  lastReminderChannel?: 'whatsapp' | 'sms' | 'telegram' | null;
+  reminderCount?: number;
+}
+
+export type FeeReminderChannel = 'whatsapp' | 'sms' | 'telegram';
+
+export interface PreparedFeeReminder {
+  feeId: string;
+  studentId: string;
+  studentName: string;
+  phone: string;
+  month: string;
+  amount: number;
+  totalDue: number;
+  message: string;
+  channels: FeeReminderChannel[];
+  preferredChannel: FeeReminderChannel;
+  lastReminder: { sentAt: string; channel: FeeReminderChannel } | null;
+}
+
+export interface SentFeeReminder {
+  notificationId?: string;
+  channel: FeeReminderChannel;
+  message: string;
+  url?: string;
+  smsUri?: string;
+  confirmationRequired?: boolean;
+  lastReminder?: { sentAt: string; channel: FeeReminderChannel } | null;
+  telegramSent?: boolean;
 }
 
 export interface ReportSummary {

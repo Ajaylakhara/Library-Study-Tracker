@@ -38,7 +38,7 @@ export const templates: Record<NotificationType, TemplateConfig> = {
   fee_unpaid: {
     templateKey: 'FEE_UNPAID',
     buildMessage: (vars) =>
-      `Hi ${vars.name}, your fee of Rs. ${vars.amount} for ${vars.month} at ${libraryName(vars)} is due. Please pay at the library counter.`,
+      `Hi ${vars.name}, your fee of Rs. ${vars.amount} for ${vars.month} at ${libraryName(vars)} is due. Total due: Rs. ${vars.totalDue ?? vars.amount}. Please pay at the library counter.`,
   },
   overtime_admin: {
     templateKey: 'OVERTIME_ADMIN',

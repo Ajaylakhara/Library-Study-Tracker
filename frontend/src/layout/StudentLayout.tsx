@@ -22,9 +22,9 @@ export function StudentLayout() {
   return (
     <div
       style={{
-        minHeight: '100vh',
+        minHeight: '100dvh',
         position: 'relative',
-        overflow: 'hidden',
+        overflowX: 'clip',
         color: '#172B45',
         fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
         fontSize: '14px',
@@ -78,7 +78,7 @@ export function StudentLayout() {
           zIndex: 1,
           maxWidth: '440px',
           margin: '0 auto',
-          minHeight: '100vh',
+          minHeight: '100dvh',
           display: 'flex',
           flexDirection: 'column',
         }}
@@ -174,7 +174,7 @@ export function StudentLayout() {
         <main
           style={{
             flex: 1,
-            padding: '16px 12px 112px',
+            padding: '16px 12px calc(112px + env(safe-area-inset-bottom))',
             display: 'flex',
             flexDirection: 'column',
             gap: '14px',
@@ -188,7 +188,7 @@ export function StudentLayout() {
           aria-label="Student Navigation"
           style={{
             position: 'fixed',
-            bottom: '12px',
+            bottom: 'calc(12px + env(safe-area-inset-bottom))',
             left: '50%',
             transform: 'translateX(-50%)',
             width: 'calc(100% - 24px)',

@@ -12,6 +12,7 @@ import { Notification } from '../src/models/Notification';
 import { NotificationService } from '../src/services/notifications/NotificationService';
 import { processQueuedNotifications } from '../src/jobs/notificationWorker';
 import { handleTelegramUpdate } from '../src/services/notifications/telegramUpdates';
+import { ADMIN_REFUSAL_MESSAGE } from '../src/services/notifications/adminBotHandlers';
 import { sendMessage } from '../src/services/notifications/providers/telegram';
 import * as database from '../src/db/connectDB';
 
@@ -220,12 +221,21 @@ describe('Telegram linking', () => {
   it('answers /myid with the current chat ID', async () => {
     const replies: string[] = [];
     await handleTelegramUpdate(
-      { message: { text: '/myid', chat: { id: 70004, type: 'private' } } },
+      { message: { text: '/myid', chat: { id: adminChatId, type: 'private' } } },
       async (_chatId, text) => {
         replies.push(text);
       }
     );
-    expect(replies).toEqual(['Your Telegram ID: 70004']);
+    expect(replies).toEqual([`Your Telegram ID: ${adminChatId}`]);
+  });
+
+  it('refuses operational commands from chats not linked to an active admin', async () => {
+    const replies: string[] = [];
+    await handleTelegramUpdate(
+      { message: { text: '/myid', chat: { id: 70004, type: 'private' } } },
+      async (_chatId, text) => { replies.push(text); }
+    );
+    expect(replies).toEqual([ADMIN_REFUSAL_MESSAGE]);
   });
 
   it('ignores group messages and prompts private users who start without a code', async () => {
@@ -323,7 +333,7 @@ describe('Telegram linking', () => {
       const privateResponsePromise = request(app)
         .post('/api/telegram/webhook')
         .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
-        .send({ message: { text: '/myid', chat: { id: 70045, type: 'private' } } })
+          .send({ message: { text: '/myid', chat: { id: adminChatId, type: 'private' } } })
         .then((response) => {
           responseReceived = true;
           return response;
@@ -338,7 +348,7 @@ describe('Telegram linking', () => {
         chat_id: string;
         text: string;
       };
-      expect(sentBody).toEqual({ chat_id: '70045', text: 'Your Telegram ID: 70045' });
+      expect(sentBody).toEqual({ chat_id: adminChatId, text: `Your Telegram ID: ${adminChatId}` });
 
       fetchSpy.mockClear();
       const groupResponse = await request(app)
@@ -396,7 +406,7 @@ describe('Telegram linking', () => {
       const responsePromise = request(app)
         .post('/api/telegram/webhook')
         .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
-        .send({ message: { text: '/myid', chat: { id: 70049, type: 'private' } } })
+        .send({ message: { text: '/myid', chat: { id: adminChatId, type: 'private' } } })
         .then((response) => {
           responseReceived = true;
           return response;
@@ -415,7 +425,7 @@ describe('Telegram linking', () => {
       const failedUpdateResponse = await request(app)
         .post('/api/telegram/webhook')
         .set('X-Telegram-Bot-Api-Secret-Token', config.telegram.webhookSecret)
-        .send({ message: { text: '/myid', chat: { id: 70050, type: 'private' } } });
+        .send({ message: { text: '/myid', chat: { id: adminChatId, type: 'private' } } });
 
       expect(failedUpdateResponse.status).toBe(200);
       expect(loggedErrors.join(' ')).toContain('[TelegramAPI] sendMessage failed');
@@ -543,7 +553,7 @@ describe('Telegram linking', () => {
     });
     try {
       await handleTelegramUpdate(
-        { message: { text: '/myid', chat: { id: 70047, type: 'private' } } },
+        { message: { text: '/myid', chat: { id: adminTestChatId, type: 'private' } } },
         async () => {
           throw new Error(`${config.telegram.botToken} ${config.telegram.webhookSecret}`);
         }

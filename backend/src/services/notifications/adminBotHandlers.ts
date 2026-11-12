@@ -20,11 +20,24 @@ import { User, IUser } from '../../models/User';
 import { TOTAL_SEATS } from '../../models/Seat';
 import { Session } from '../../models/Session';
 import { Notification, INotification } from '../../models/Notification';
-import { Fee } from '../../models/Fee';
 import { config } from '../../config';
 import { performForceCheckout } from '../forceCheckout';
 export { performForceCheckout } from '../forceCheckout';
-import { enqueueFeeReminder, markFeePaid, updateStudentStatus } from '../adminActions';
+import { markFeePaid, updateStudentStatus } from '../adminActions';
+import { listFees, summarizeFees } from '../feeQueries';
+import {
+  beginFeeSearch,
+  cancelFeeBotState,
+  confirmCreateCurrentFee,
+  createCurrentFeeForStudent,
+  markFeeReminderSentFromBot,
+  searchFeeStudents,
+  sendFeeReminderFromBot,
+  showFeeMenu,
+  showFeeReminderOptions,
+  showFeeSearchPrompt,
+  showFeeStudent,
+} from './feeBotHandlers';
 import { diffMinutes, formatDuration, previousMonthString, toMonthString, TZ } from '../../utils/time';
 import { buildWhatsAppUrl } from '../../utils/phone';
 import {
@@ -39,7 +52,8 @@ import {
 
 export const ADMIN_KEYBOARD_ROWS = [
   ['👥 Live seats', '⏱ Overtime'],
-  ['📝 Pending requests', '💰 Unpaid fees'],
+  ['📝 Pending requests', '💰 Fees'],
+  ['💰 Unpaid fees'],
 ];
 export const ADMIN_REFUSAL_MESSAGE = '⛔ This bot is only accessible to authorized administrators.';
 
@@ -55,8 +69,8 @@ export function menuInlineKeyboard(): TelegramInlineKeyboard {
     ],
     [
       { text: '📝 Pending requests', callback_data: callbackData('menu_pending', '0') },
-      { text: '💰 Unpaid fees', callback_data: callbackData('menu_unpaid', '0') },
     ],
+    [{ text: '💰 Fees', callback_data: callbackData('menu_fees', '0') }],
   ];
 }
 
@@ -146,6 +160,7 @@ export async function handleHelp(
     '• /menu — Open the admin menu\n' +
     '• /live — View current occupancy\n' +
     '• /pending — Review pending registrations\n' +
+    '• /fees [name or phone] — Search student fees\n' +
     '• /unpaid — Review unpaid fees\n' +
     '• /overtime — View students past their shift end\n' +
     '• /help — Show this help message\n' +
@@ -216,16 +231,18 @@ export async function handlePending(
     return;
   }
 
-  for (const student of students) {
-    const text =
-      `📝 <b>${escapeHtml(student.name)}</b>\n` +
-      `Phone: ${escapeHtml(student.phone ?? '—')}\n` +
-      `Seat: ${student.seatNumber ?? '—'} · Shift: ${student.shiftHours ?? '—'}h`;
-    await sendMsg(chatId, text, withHomeButton([[
-      { text: '✅ Approve', callback_data: callbackData('student_approve', student._id.toString()) },
-      { text: '❌ Reject', callback_data: callbackData('student_reject', student._id.toString()) },
-    ]]));
-  }
+  const lines = students.map((student, index) =>
+    `${index + 1}. <b>${escapeHtml(student.name)}</b> · ${escapeHtml(student.phone ?? '—')} · Seat ${student.seatNumber ?? '—'} · ${student.shiftHours ?? '—'}h`
+  );
+  const buttons = students.map((student) => [
+    { text: `✅ Approve · ${student.name.slice(0, 20)}`, callback_data: callbackData('student_approve', student._id.toString()) },
+    { text: `❌ Reject · ${student.name.slice(0, 20)}`, callback_data: callbackData('student_reject', student._id.toString()) },
+  ]);
+  await sendMsg(
+    chatId,
+    `📝 <b>Pending requests</b> (${students.length}${students.length === 25 ? '+' : ''})\n\n${lines.join('\n')}`,
+    withHomeButton(buttons)
+  );
 }
 
 export async function handleUnpaidFees(
@@ -233,43 +250,35 @@ export async function handleUnpaidFees(
   sendMsg: typeof sendMessageHtml = sendMessageHtml
 ): Promise<void> {
   const months = [toMonthString(new Date()), previousMonthString()];
-  const [fees, summaries] = await Promise.all([
-    Fee.find({ status: 'unpaid', month: { $in: months } })
-      .sort({ month: -1, createdAt: -1 })
-      .limit(25)
-      .populate<{ student: { _id: mongoose.Types.ObjectId; name: string; phone?: string } }>(
-        'student',
-        'name phone'
-      ),
-    Fee.aggregate<{ total: number; count: number }>([
-      { $match: { status: 'unpaid', month: { $in: months } } },
-      { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]),
+  const [result, summary] = await Promise.all([
+    listFees({ status: 'unpaid', months }, { limit: 20 }),
+    summarizeFees({ status: 'unpaid', months }),
   ]);
-  const summary = summaries[0] ?? { total: 0, count: 0 };
+  const { fees } = result;
 
-  if (summary.count === 0) {
-    await sendMsg(chatId, `💰 <b>Unpaid fees</b>\n\nNo unpaid fees for ${months.join(' or ')}.`, homeKeyboard());
+  if (!summary.count) {
+    await sendMsg(chatId, `💰 <b>Unpaid fees</b>\n\nNo unpaid fees for ${months.join(' or ')}.`, withHomeButton([
+      [{ text: '📩 Search student', callback_data: callbackData('fee_search', '0') }],
+    ]));
     return;
   }
 
+  const lines = fees.map((fee, index) => {
+    const student = fee.student as unknown as { name?: string; phone?: string } | null;
+    return `${index + 1}. <b>${escapeHtml(student?.name ?? 'Former student')}</b> · ${fee.month} · ₹${fee.amount.toLocaleString('en-IN')} · ${escapeHtml(student?.phone ?? '—')}`;
+  });
+  const buttons = fees.map((fee) => [
+    { text: `📩 Remind · ${fee.month}`, callback_data: callbackData('fee_remind', fee._id.toString()) },
+    { text: `💰 Mark paid · ${fee.month}`, callback_data: callbackData('fee_paid', fee._id.toString()) },
+  ]);
+  if (summary.count > fees.length) {
+    lines.push(`…and ${summary.count - fees.length} more records.`);
+  }
   await sendMsg(
     chatId,
-    `💰 <b>Unpaid fees</b> (${summary.count} records; showing ${fees.length})\n` +
-      `Total pending: ₹${summary.total.toLocaleString('en-IN')}`,
-      homeKeyboard()
+    `💰 <b>Unpaid fees</b> (${summary.count} records)\nTotal pending: ₹${summary.total.toLocaleString('en-IN')}\n\n${lines.join('\n')}`,
+    withHomeButton(buttons)
   );
-  for (const fee of fees) {
-    const student = fee.student;
-    const text =
-      `💰 <b>${escapeHtml(student?.name ?? 'Former student')}</b>\n` +
-      `Month: ${fee.month} · Amount: ₹${fee.amount.toLocaleString('en-IN')}\n` +
-      `Phone: ${escapeHtml(student?.phone ?? '—')}`;
-    await sendMsg(chatId, text, withHomeButton([[
-      { text: '✔ Mark paid', callback_data: callbackData('fee_paid', fee._id.toString()) },
-      { text: '📩 Send reminder', callback_data: callbackData('fee_remind', fee._id.toString()) },
-    ]]));
-  }
 }
 
 /**
@@ -544,36 +553,94 @@ export async function handleBotCallbackQuery(
       await answerOnce(answerText);
       await edit(chatId, messageId, messageText, keyboard);
     };
+    if (action !== 'fee_search') await cancelFeeBotState(chatId);
 
     if (action === 'menu' && id === '0') {
       await complete('Admin menu.', '<b>Admin control panel</b>', menuInlineKeyboard());
       return;
     }
 
-    if (action === 'menu_live' || action === 'menu_overtime' || action === 'menu_pending' || action === 'menu_unpaid' || action === 'live_refresh') {
-      let firstOutput = true;
+    if (action === 'menu_live' || action === 'menu_overtime' || action === 'menu_pending' || action === 'menu_unpaid' || action === 'menu_fees' || action === 'live_refresh') {
       const render = async (
         targetChatId: string,
         text: string,
         keyboard?: TelegramInlineKeyboard
       ): Promise<TelegramSendResult> => {
-        const finalKeyboard = keyboard ?? homeKeyboard();
-        if (firstOutput) {
-          firstOutput = false;
-          return edit(targetChatId, messageId, text, finalKeyboard);
-        }
-        return sendMessageHtml(targetChatId, text, finalKeyboard);
+        return edit(targetChatId, messageId, text, keyboard ?? homeKeyboard());
       };
 
       await answerOnce(action === 'live_refresh' ? 'Updated.' : 'Opening menu item.');
       if (action === 'menu_live' || action === 'live_refresh') await handleLive(chatId, render);
       else if (action === 'menu_overtime') await handleOvertime(chatId, render);
       else if (action === 'menu_pending') await handlePending(chatId, render);
-      else await handleUnpaidFees(chatId, render);
+      else if (action === 'menu_unpaid') await handleUnpaidFees(chatId, render);
+      else await showFeeMenu((text, keyboard) => render(chatId, text, keyboard));
       return;
     }
 
     const finalKeyboard = homeKeyboard();
+    const renderFee = (text: string, keyboard?: TelegramInlineKeyboard) =>
+      edit(chatId, messageId, text, keyboard ?? finalKeyboard);
+
+    if (action === 'fee_search' && id === '0') {
+      await beginFeeSearch(chatId);
+      await answerOnce('Search started.');
+      await showFeeSearchPrompt(renderFee);
+      return;
+    }
+
+    if (action === 'fee_back' && id === '0') {
+      await answerOnce('Fees menu.');
+      await showFeeMenu(renderFee);
+      return;
+    }
+
+    if (action === 'fee_s') {
+      await answerOnce('Loading student fees.');
+      await showFeeStudent(id, renderFee);
+      return;
+    }
+
+    if (action === 'fee_remind') {
+      await answerOnce('Preparing reminder.');
+      await showFeeReminderOptions(id, renderFee);
+      return;
+    }
+
+    if (action.startsWith('fee_send_') || action.startsWith('fee_confirm_')) {
+      const confirmed = action.startsWith('fee_confirm_');
+      const channel = action.slice(confirmed ? 'fee_confirm_'.length : 'fee_send_'.length);
+      if (channel !== 'whatsapp' && channel !== 'sms' && channel !== 'telegram') {
+        await complete('Unknown reminder channel.', '⚠️ Unknown reminder channel.');
+        return;
+      }
+      await answerOnce(confirmed ? 'Sending confirmed reminder.' : 'Sending reminder.');
+      await sendFeeReminderFromBot(id, channel, admin._id, confirmed, renderFee);
+      return;
+    }
+
+    if (action === 'fee_reminder_sent') {
+      await answerOnce('Recording reminder status.');
+      await markFeeReminderSentFromBot(id, admin._id, renderFee);
+      return;
+    }
+
+    if (action === 'fee_create') {
+      await answerOnce('Confirm fee creation.');
+      await confirmCreateCurrentFee(id, renderFee);
+      return;
+    }
+
+    if (action === 'fee_create_yes') {
+      await answerOnce('Creating fee.');
+      await createCurrentFeeForStudent(id, renderFee);
+      return;
+    }
+
+    if (action === 'fee_create_no') {
+      await complete('Cancelled.', `${originalText}\n\nFee creation cancelled.`);
+      return;
+    }
 
     if (action === 'student_approve') {
       const result = await updateStudentStatus(id, 'approved', config.defaultMonthlyFee, 'pending');
@@ -626,6 +693,14 @@ export async function handleBotCallbackQuery(
     }
 
     if (action === 'fee_paid') {
+      await complete('Confirm payment.', `${originalText}\n\nMark this fee as paid?`, [[
+        { text: '✅ Yes, mark paid', callback_data: callbackData('fee_paid_yes', id) },
+        { text: 'No', callback_data: callbackData('fee_paid_no', id) },
+      ], ...homeKeyboard() as TelegramInlineButton[][]]);
+      return;
+    }
+
+    if (action === 'fee_paid_yes') {
       const result = await markFeePaid(id, admin._id);
       await complete(
         result.alreadyHandled ? 'Already handled' : 'Marked paid.',
@@ -634,9 +709,8 @@ export async function handleBotCallbackQuery(
       return;
     }
 
-    if (action === 'fee_remind') {
-      await enqueueFeeReminder(id);
-      await complete('Reminder queued.', `${originalText}\n\n📩 Reminder queued.`);
+    if (action === 'fee_paid_no') {
+      await complete('Cancelled.', `${originalText}\n\nPayment update cancelled.`);
       return;
     }
 

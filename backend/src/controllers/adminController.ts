@@ -9,6 +9,7 @@ import { User } from '../models/User';
 import { Seat, TOTAL_SEATS } from '../models/Seat';
 import { Session } from '../models/Session';
 import { Fee } from '../models/Fee';
+import { listFees } from '../services/feeQueries';
 import { Notification } from '../models/Notification';
 import { createError } from '../middleware/errorHandler';
 import {
@@ -478,19 +479,11 @@ export const getFees = async (req: AuthRequest, res: Response, next: NextFunctio
     const { page, limit, skip } = parsePagination(req.query as Record<string, unknown>);
     const { status, month, studentId } = req.query as Record<string, string>;
 
-    const filter: Record<string, unknown> = {};
-    if (status) filter.status = status;
-    if (month) filter.month = month;
-    if (studentId) filter.student = studentId;
-
-    const [fees, total] = await Promise.all([
-      Fee.find(filter)
-        .sort({ month: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate('student', 'name phone'),
-      Fee.countDocuments(filter),
-    ]);
+    const { fees, total } = await listFees({
+      ...(status && { status: status as 'paid' | 'unpaid' }),
+      ...(month && { month }),
+      ...(studentId && { studentId }),
+    }, { skip, limit });
 
     res.json({ success: true, data: fees, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (err) {

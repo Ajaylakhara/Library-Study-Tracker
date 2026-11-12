@@ -99,6 +99,8 @@ export const config = {
   devAuthBypass: process.env.DEV_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',
 
   clientUrl: process.env.CLIENT_URL ?? 'http://localhost:3000',
+  defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE ?? '+91',
+  smsActionTokenSecret: process.env.SMS_ACTION_TOKEN_SECRET ?? '',
 
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? '',

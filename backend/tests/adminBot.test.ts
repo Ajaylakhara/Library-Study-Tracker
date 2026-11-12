@@ -6,7 +6,7 @@
  *  - Step (c): Admin authorization (requireLinkedAdmin) & commands (/help, /live, /overtime)
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import request from 'supertest';
 import mongoose from 'mongoose';
 import dns from 'dns';
@@ -42,9 +42,17 @@ import { Seat } from '../src/models/Seat';
 import { Session } from '../src/models/Session';
 import { Notification } from '../src/models/Notification';
 import { Fee } from '../src/models/Fee';
+import { BotState } from '../src/models/BotState';
 import { config } from '../src/config';
 import { getAssignableSeatNumbers } from '../src/utils/seatAssignments';
 import { previousMonthString, toMonthString } from '../src/utils/time';
+import { escapeRegex, searchFeeStudents, beginFeeSearch, consumeFeeSearch } from '../src/services/notifications/feeBotHandlers';
+import {
+  getSmsAction,
+  markSent,
+  normalizeReminderPhone,
+  sendReminder,
+} from '../src/services/feeReminderService';
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -133,6 +141,20 @@ describe('buildWhatsAppUrl', () => {
     expect(url).toBe(
       'https://wa.me/919876543210?text=' + encodeURIComponent('Hello, please check out.')
     );
+  });
+
+  describe('fee reminder phone normalization', () => {
+    it.each([
+      ['9876543210', '+919876543210'],
+      ['+91 98765-43210', '+919876543210'],
+      ['0091 9876543210', '+919876543210'],
+    ])('normalizes %s', (input, expected) => {
+      expect(normalizeReminderPhone(input)).toBe(expected);
+    });
+
+    it('rejects invalid numbers', () => {
+      expect(() => normalizeReminderPhone('1234567890')).toThrow('missing or invalid');
+    });
   });
 
   it('normalises +91 prefix before building the URL', () => {
@@ -422,7 +444,8 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent).toContain('Admin control panel:');
       expect(ADMIN_KEYBOARD_ROWS).toEqual([
         ['👥 Live seats', '⏱ Overtime'],
-        ['📝 Pending requests', '💰 Unpaid fees'],
+        ['📝 Pending requests', '💰 Fees'],
+        ['💰 Unpaid fees'],
       ]);
     });
 
@@ -445,6 +468,43 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(combined).toContain(`Checked in: ${activeCount} · Overtime: ${overtimeCount} · Free: ${70 - activeCount}`);
       expect(combined).toContain('John &lt;Doe&gt; &amp; Friends');
       expect(combined).toContain(`Seat ${testSeat1.number}`);
+    });
+
+    it('routes /live and /unpaid separately and includes the current-month fee shown on the website', async () => {
+      const month = toMonthString(new Date());
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month,
+        amount: 500,
+        status: 'unpaid',
+      });
+      const websiteFees = await request(app)
+        .get('/api/admin/fees')
+        .query({ month, status: 'unpaid' })
+        .set('Cookie', adminCookie);
+      const liveMessages: string[] = [];
+      const unpaidMessages: string[] = [];
+
+      try {
+        await handleTelegramUpdate(
+          { message: { text: '/live', chat: { id: linkedAdminChatId, type: 'private' } } },
+          async (_cid, text) => { liveMessages.push(text); }
+        );
+        await handleTelegramUpdate(
+          { message: { text: '/unpaid', chat: { id: linkedAdminChatId, type: 'private' } } },
+          async (_cid, text) => { unpaidMessages.push(text); }
+        );
+
+        expect(websiteFees.status).toBe(200);
+        expect(websiteFees.body.data.map((record: { _id: string }) => record._id)).toContain(fee._id.toString());
+        expect(liveMessages.join('\n')).toContain('Live Study Status');
+        expect(liveMessages.join('\n')).not.toContain('Unpaid fees');
+        expect(unpaidMessages.join('\n')).toContain('Unpaid fees');
+        expect(unpaidMessages.join('\n')).toContain('John &lt;Doe&gt; &amp; Friends');
+        expect(unpaidMessages.join('\n')).toContain('₹500');
+      } finally {
+        await Fee.deleteOne({ _id: fee._id });
+      }
     });
 
     it('adds an inline Refresh button to /live output', async () => {
@@ -479,7 +539,7 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         '👥 Live seats',
         '⏱ Overtime',
         '📝 Pending requests',
-        '💰 Unpaid fees',
+        '💰 Fees',
       ]);
       expect(replyRows).toEqual(ADMIN_KEYBOARD_ROWS);
     });
@@ -565,6 +625,127 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         expect(callbackDataValues).toContain(`fee_paid:${fee._id}`);
         expect(callbackDataValues).toContain(`fee_remind:${fee._id}`);
       } finally {
+        await Fee.deleteOne({ _id: fee._id });
+      }
+    });
+
+    it('searches students by escaped name and formatted phone digits', async () => {
+      const renderResults: Array<{ text: string; keyboard: any }> = [];
+      const render = async (text: string, keyboard?: any) => {
+        renderResults.push({ text, keyboard });
+        return { ok: true };
+      };
+
+      expect(escapeRegex('John.*')).toBe('John\\.\\*');
+      await searchFeeStudents('John <Doe>', render);
+      expect(renderResults[0].keyboard.flat().some(
+        (button: any) => button.callback_data === `fee_s:${testStudentUser._id}`
+      )).toBe(true);
+
+      renderResults.length = 0;
+      await searchFeeStudents(testPhones[3].slice(2, 7), render);
+      expect(renderResults[0].keyboard.flat().some(
+        (button: any) => button.callback_data === `fee_s:${testStudentUser._id}`
+      )).toBe(true);
+
+      renderResults.length = 0;
+      await searchFeeStudents('.*', render);
+      expect(renderResults[0].text).toContain('No approved student matched');
+    });
+
+    it('ignores expired Mongo-backed fee search state', async () => {
+      await beginFeeSearch(linkedAdminChatId);
+      await BotState.updateOne(
+        { chatId: linkedAdminChatId },
+        { $set: { expiresAt: new Date(Date.now() - 1) } }
+      );
+      const render = jest.fn(async () => ({ ok: true }));
+      await consumeFeeSearch(linkedAdminChatId, 'John', render);
+      expect(render).not.toHaveBeenCalled();
+      expect(await BotState.exists({ chatId: linkedAdminChatId })).toBe(false);
+    });
+
+    it('requires admin authentication for reminder endpoints', async () => {
+      const response = await request(app)
+        .post(`/api/admin/fees/${new mongoose.Types.ObjectId()}/reminder/prepare`)
+        .send({});
+      expect(response.status).toBe(401);
+    });
+
+    it('warns about a reminder sent in the last 24 hours', async () => {
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month: toMonthString(new Date()),
+        amount: 900,
+        status: 'unpaid',
+        lastReminderAt: new Date(Date.now() - 60 * 60 * 1000),
+        lastReminderChannel: 'whatsapp',
+      });
+      try {
+        const result = await sendReminder({
+          feeId: fee._id.toString(),
+          adminId: testAdminUser._id,
+          channel: 'whatsapp',
+        });
+        expect(result.confirmationRequired).toBe(true);
+        expect(result.lastReminder?.channel).toBe('whatsapp');
+        expect(result.notificationId).toBeUndefined();
+      } finally {
+        await Fee.deleteOne({ _id: fee._id });
+      }
+    });
+
+    it('encodes WhatsApp reminders and marks them sent idempotently', async () => {
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month: toMonthString(new Date()),
+        amount: 1350,
+        status: 'unpaid',
+      });
+      try {
+        const message = 'Fee reminder: ₹1,350 & thank you';
+        const prepared = await sendReminder({
+          feeId: fee._id.toString(),
+          adminId: testAdminUser._id,
+          channel: 'whatsapp',
+          message,
+        });
+        expect(prepared.url).toBe(
+          `https://wa.me/${testPhones[3]}?text=${encodeURIComponent(message)}`
+        );
+        const first = await markSent(prepared.notificationId!, testAdminUser._id);
+        const second = await markSent(prepared.notificationId!, testAdminUser._id);
+        expect(first.alreadySent).toBe(false);
+        expect(second.alreadySent).toBe(true);
+      } finally {
+        await Notification.deleteMany({ feeId: fee._id });
+        await Fee.deleteOne({ _id: fee._id });
+      }
+    });
+
+    it('rejects SMS action links after their 24-hour expiry', async () => {
+      const fee = await Fee.create({
+        student: testStudentUser._id,
+        month: toMonthString(new Date()),
+        amount: 700,
+        status: 'unpaid',
+      });
+      const originalSecret = config.smsActionTokenSecret;
+      config.smsActionTokenSecret = 'test-secret-that-is-long-enough-for-hmac';
+      let nowSpy: ReturnType<typeof jest.spyOn> | undefined;
+      try {
+        const prepared = await sendReminder({
+          feeId: fee._id.toString(),
+          adminId: testAdminUser._id,
+          channel: 'sms',
+        });
+        const token = prepared.url!.split('/').pop()!;
+        nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+        await expect(getSmsAction(token)).rejects.toThrow('invalid or expired');
+      } finally {
+        nowSpy?.mockRestore();
+        config.smsActionTokenSecret = originalSecret;
+        await Notification.deleteMany({ feeId: fee._id });
         await Fee.deleteOne({ _id: fee._id });
       }
     });
@@ -680,7 +861,13 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         answers.push(text ?? '');
         return { ok: true };
       };
-      const edit = async () => ({ ok: true });
+      let confirmationData = '';
+      const edit = async (_chatId: string, _messageId: number, _text: string, keyboard: any) => {
+        confirmationData = keyboard.flat().find(
+          (button: any) => button.callback_data?.startsWith('fee_paid_yes:')
+        )?.callback_data ?? '';
+        return { ok: true };
+      };
       const update = {
         id: 'fee_paid_callback',
         from: { id: linkedAdminChatId },
@@ -694,9 +881,11 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
 
       try {
         await handleBotCallbackQuery(update, answer as any, edit as any);
-        await handleBotCallbackQuery(update, answer as any, edit as any);
+        expect(confirmationData).toBe(callbackData('fee_paid_yes', fee._id.toString()));
+        await handleBotCallbackQuery({ ...update, data: confirmationData }, answer as any, edit as any);
+        await handleBotCallbackQuery({ ...update, data: confirmationData }, answer as any, edit as any);
         expect((await Fee.findById(fee._id))?.status).toBe('paid');
-        expect(answers).toEqual(['Marked paid.', 'Already handled']);
+        expect(answers).toEqual(['Confirm payment.', 'Marked paid.', 'Already handled']);
       } finally {
         await Fee.deleteOne({ _id: fee._id });
       }

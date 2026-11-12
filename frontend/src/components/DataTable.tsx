@@ -6,6 +6,8 @@ export interface Column<T> {
   header: string;
   align?: 'left' | 'right';
   mobileHideLabel?: boolean;
+  mobileTop?: boolean;
+  mobileActions?: boolean;
   primary?: boolean;
   className?: string;
   render: (row: T) => ReactNode;
@@ -25,6 +27,9 @@ export function DataTable<T>({
 }) {
   const primary = columns.find((c) => c.primary) ?? columns[0];
   const rest    = columns.filter((c) => c !== primary);
+  const top     = rest.filter((c) => c.mobileTop || /^(status|state)$/i.test(c.header));
+  const details = rest.filter((c) => !top.includes(c) && !c.mobileActions && !c.mobileHideLabel);
+  const actions = rest.filter((c) => c.mobileActions || c.mobileHideLabel);
 
   return (
     <div className="glass-b overflow-hidden rounded-2xl">
@@ -80,24 +85,22 @@ export function DataTable<T>({
         {rows.map((r) => (
           <li
             key={rowKey(r)}
-            className="flex flex-col gap-2.5 p-4 transition-colors"
+            className="mobile-data-card flex min-w-0 flex-col gap-2.5 p-4 transition-colors"
             style={{ borderBottom: '1px solid rgba(3,39,85,.07)' }}
           >
-            <div className="font-semibold" style={{ color: '#172B45' }}>{primary.render(r)}</div>
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-[13px]">
-              {rest.map((c) =>
-                c.mobileHideLabel ? (
-                  <div key={c.key} className="col-span-2 flex flex-wrap justify-end gap-2">
-                    {c.render(r)}
-                  </div>
-                ) : (
-                  <div key={c.key} className="flex flex-col gap-0.5">
-                    <dt className="text-xs" style={{ color: '#5A6A7F' }}>{c.header}</dt>
-                    <dd className="tnum" style={{ color: '#172B45' }}>{c.render(r)}</dd>
-                  </div>
-                )
-              )}
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 break-words font-semibold" style={{ color: '#172B45' }}>{primary.render(r)}</div>
+              {top.map((c) => <div key={c.key} className="shrink-0">{c.render(r)}</div>)}
+            </div>
+            <dl className="mobile-data-details grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 text-[13px]">
+              {details.map((c) => (
+                <div key={c.key} className="min-w-0">
+                  <dt className="text-xs" style={{ color: '#5A6A7F' }}>{c.header}</dt>
+                  <dd className="tnum min-w-0 break-words" style={{ color: '#172B45' }}>{c.render(r)}</dd>
+                </div>
+              ))}
             </dl>
+            {actions.map((c) => <div key={c.key} className="mobile-data-actions">{c.render(r)}</div>)}
           </li>
         ))}
       </ul>

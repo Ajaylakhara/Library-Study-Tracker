@@ -101,7 +101,7 @@ frees the seat; the student's seat assignment remains saved for a later visit.
 | Live seats | `/admin/seats` | Current seat occupancy and active sessions |
 | Students | `/admin/students` | Search, approve, edit, block, and manage student accounts |
 | Sessions | `/admin/sessions` | Review sessions and force-checkout active sessions |
-| Fees | `/admin/fees` | Review fees, mark payment, and generate fee records |
+| Fees | `/admin/fees` | Review fees, mark payment, generate fee records, and prepare individual WhatsApp/SMS/Telegram reminders |
 | Reports | `/admin/reports` | View reports and export attendance |
 | Alerts | `/admin/alerts` | Review notifications, delivery status, and supported manual follow-ups |
 
@@ -204,8 +204,16 @@ documentation.
 
 ### 3. Bot messages and notification delivery
 
-- The bot supports `/myid`, which replies with the sender's numeric Telegram
-  ID, and `/start` with or without a link code.
+- The bot supports `/start` for account linking and `/myid`, `/menu`, `/live`,
+  `/pending`, `/overtime`, `/unpaid`, `/fees`, and `/help` for linked,
+  active administrators.
+- `/live` shows checked-in and overtime counts, available seats, and time
+  remaining, with a Refresh button. `/unpaid` shows current/previous month
+  unpaid fees and a reminder action. `/fees` searches students by name or
+  phone; the search state is stored in MongoDB and expires after five minutes.
+- Fee reminders use the same backend service from the bot and `/admin/fees`.
+  WhatsApp and SMS reminders are prepared for manual sending; linked students
+  can also receive a reminder directly through Telegram.
 - Eligible notification events are stored in MongoDB before delivery. The
   worker sends queued Telegram messages and records success or failure.
 - A linked student can receive the approval notification; shift and fee
@@ -218,12 +226,9 @@ documentation.
 - Unlinked users do not become automatically linked just by messaging the bot;
   they need to start from a valid app-generated link.
 
-**Implementation boundary:** the current bot code handles account linking,
-`/myid`, and `/start`. The separate
-[notification plan](./docs/notification-plan.md) describes additional
-ideas—including owner approvals and commands such as `/live`, `/pending`,
-`/unpaid`, `/requests`, and `/admins`—that are not present in the current bot
-handlers. Treat those as planned, not as available bot features.
+**Implementation boundary:** `/requests` and `/admins` remain ideas in the
+separate [notification plan](./docs/notification-plan.md); they are not current
+bot commands.
 
 ## Main end-to-end workflows
 
@@ -254,6 +259,9 @@ handlers. Treat those as planned, not as available bot features.
 1. The monthly job or an administrator's manual action creates fee records.
    Existing student/month records are skipped.
 2. An administrator reviews fees and marks payments in `/admin/fees`.
+   The Remind action prepares a student-specific message and lets the admin
+   choose WhatsApp, SMS, or Telegram when linked. Manual sends can be marked
+   sent, and reminders sent within the previous 24 hours require confirmation.
 3. Students see only their own fee records; administrators can review report
    summaries and download attendance CSVs.
 

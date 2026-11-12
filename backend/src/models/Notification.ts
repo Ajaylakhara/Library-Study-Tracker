@@ -28,6 +28,7 @@ export interface INotification extends Document {
   lastError: string | null;
   providerMessageId: string | null;
   sentAt: Date | null;
+  sentBy: mongoose.Types.ObjectId | null;
   sessionId: mongoose.Types.ObjectId | null;
   feeId: mongoose.Types.ObjectId | null;
   read: boolean;
@@ -85,6 +86,11 @@ const notificationSchema = new Schema<INotification>(
     lastError: { type: String, default: null },
     providerMessageId: { type: String, default: null },
     sentAt: { type: Date, default: null },
+    sentBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
     sessionId: {
       type: Schema.Types.ObjectId,
       ref: 'Session',

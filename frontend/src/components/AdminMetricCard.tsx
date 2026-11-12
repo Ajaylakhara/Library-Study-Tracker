@@ -21,10 +21,10 @@ export function AdminMetricCard({
       >
         {icon}
       </span>
-      <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="truncate text-[13px] text-muted">{label}</span>
-        <strong className="tnum font-serif text-[23px] font-semibold leading-tight text-oxford">{value}</strong>
-        <span className="truncate text-xs text-muted">{note}</span>
+      <span className="admin-metric-copy flex min-w-0 flex-col gap-0.5">
+        <span className="admin-metric-label text-[13px] text-muted">{label}</span>
+        <strong className="admin-metric-value tnum font-serif text-[23px] font-semibold leading-tight text-oxford">{value}</strong>
+        <span className="admin-metric-note text-xs text-muted">{note}</span>
       </span>
     </div>
   );

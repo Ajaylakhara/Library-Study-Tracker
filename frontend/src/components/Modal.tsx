@@ -73,27 +73,28 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={titleId}
         className={cn(
-          'glass-a glass-keep anim-sheet sm:anim-pop',
-          'flex max-h-[92vh] w-full flex-col gap-4 overflow-y-auto',
-          'rounded-t-[24px] px-6 pb-8 pt-3',
-          'sm:rounded-2xl sm:p-7',
+          'modal-dialog glass-a glass-keep anim-sheet sm:anim-pop',
+          'flex max-h-[90dvh] w-full flex-col gap-4 overflow-hidden',
+          'rounded-t-[24px] px-5 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3',
+          'sm:max-h-[90dvh] sm:rounded-2xl sm:p-7',
           width
         )}
       >
         {/* Drag handle (mobile) */}
         <div className="mx-auto h-1 w-10 rounded-full sm:hidden" style={{ background: 'rgba(3,39,85,.18)' }} aria-hidden />
 
-        <div className="flex flex-col gap-1">
-          {kicker && <span className="kicker">{kicker}</span>}
-          <h2 id={titleId} className="font-serif text-2xl font-semibold leading-tight" style={{ color: '#172B45' }}>
-            {title}
-          </h2>
+        <div className="modal-scroll-body flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+          <div className="flex flex-col gap-1">
+            {kicker && <span className="kicker">{kicker}</span>}
+            <h2 id={titleId} className="font-serif text-2xl font-semibold leading-tight" style={{ color: '#172B45' }}>
+              {title}
+            </h2>
+          </div>
+          {children}
         </div>
 
-        {children}
-
         {footer && (
-          <div className="flex flex-col-reverse gap-2 pt-4 sm:flex-row sm:justify-end"
+          <div className="modal-actions flex shrink-0 flex-col-reverse gap-2 pt-4 sm:flex-row sm:justify-end"
                style={{ borderTop: '1px solid rgba(3,39,85,.10)' }}>
             {footer}
           </div>

@@ -160,6 +160,61 @@ input.glass-c:focus,select.glass-c:focus{border-color:#032755;box-shadow:0 0 0 3
   .admin-route button:not(:disabled):hover{filter:brightness(.97);}
 }
 .admin-route [role=tab]{transition:color .18s ease,background-color .18s ease,box-shadow .18s ease,transform .18s ease;}
+html,body,#root{min-width:0;max-width:100%;overflow-x:clip}
+.admin-route,.admin-route>*{min-width:0;max-width:100%}
+.admin-metric-card{align-items:flex-start}
+.admin-metric-copy{flex:1}
+.admin-metric-label,.admin-metric-note{overflow-wrap:anywhere;white-space:normal}
+.admin-metric-value{font-size:clamp(18px,5vw,23px)}
+.mobile-data-card{overflow-wrap:anywhere}
+.mobile-data-actions{display:grid;grid-template-columns:minmax(0,1fr);width:100%;gap:8px}
+.mobile-data-actions button{width:100%;min-height:44px;white-space:normal}
+.modal-dialog{box-sizing:border-box}
+.modal-scroll-body{overscroll-behavior:contain}
+.modal-actions{position:sticky;bottom:0;padding-bottom:env(safe-area-inset-bottom);background:rgba(255,254,252,.97)}
+.admin-mobile-drawer{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+.admin-mobile-drawer-panel{height:100%;animation:slide-in-left .22s ease-out}
+.admin-topbar{position:relative!important}
+.admin-topbar-toggle,.admin-topbar-alerts{min-width:44px;min-height:44px}
+.admin-fee-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.admin-fee-stats>*{min-width:0}
+@media(max-width:639px){
+  .admin-topbar{display:grid!important;grid-template-columns:44px minmax(0,1fr) 44px;grid-template-areas:"menu title alerts";align-items:center!important;gap:8px!important;min-height:0!important;padding:10px 12px!important;border-radius:16px!important}
+  .admin-topbar [data-admin-menu]{grid-area:menu;width:44px!important;height:44px!important}
+  .admin-topbar-title{grid-area:title;flex:none!important;width:100%;min-width:0}
+  .admin-topbar-title>div{gap:0!important}
+  .admin-topbar-title h1{font-size:clamp(21px,6.6vw,28px)!important;line-height:1.1!important;overflow-wrap:anywhere}
+  .admin-topbar-title>div>span{display:none!important}
+  .admin-topbar-title p{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;margin-top:3px!important;font-size:12px!important;line-height:1.3}
+  .admin-topbar-meta{display:contents!important}
+  .admin-topbar-meta>div,.admin-topbar-meta>[aria-hidden=true]{display:none!important}
+  .admin-topbar [data-admin-alerts]{grid-area:alerts;justify-self:end;width:44px!important;height:44px!important}
+  .modal-dialog{max-height:90dvh!important;width:100%;padding-left:16px!important;padding-right:16px!important;border-radius:24px 24px 0 0!important}
+  .modal-actions{margin-bottom:calc(-1 * env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom)}
+  .admin-fee-stats .admin-metric-card{padding:10px!important;gap:8px!important}
+  .admin-fee-stats .admin-metric-card>span:first-child{width:34px;height:34px;flex-basis:34px}
+  .admin-fee-stats .admin-metric-label{font-size:12px}
+}
+@media(max-width:359px){
+  .admin-fee-stats{grid-template-columns:minmax(0,1fr)}
+  .mobile-data-details{grid-template-columns:minmax(0,1fr)}
+  .admin-topbar-title h1{font-size:22px!important}
+}
+.admin-account-page,.admin-account-card{min-width:0;width:100%;box-sizing:border-box;}
+.admin-account-card{padding:24px;}
+.admin-account-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;}
+.admin-account-submit,.admin-account-secondary{box-sizing:border-box;display:inline-flex;min-width:148px;align-items:center;justify-content:center;text-align:center;line-height:1.25;white-space:normal;}
+.admin-account-submit:disabled,.admin-account-secondary:disabled{cursor:not-allowed;opacity:.62;}
+.admin-account-logo-dropzone{max-width:100%;box-sizing:border-box;}
+.admin-account-logo-dropzone img{max-width:100%;}
+@media(max-width:600px){
+  .admin-account-card{padding:16px!important;border-radius:16px!important;gap:18px!important;}
+  .admin-account-actions{display:grid;grid-template-columns:minmax(0,1fr);}
+  .admin-account-submit,.admin-account-secondary{width:100%;min-width:0;min-height:48px;}
+  .admin-account-logo-dropzone{gap:10px!important;padding:12px!important;}
+  .admin-topbar{padding:12px!important;gap:10px!important;border-radius:16px!important;}
+  .admin-topbar h1{font-size:clamp(21px,6.6vw,28px)!important;}
+}
 
 /* press squash */
 button{transition:transform .12s ease;}

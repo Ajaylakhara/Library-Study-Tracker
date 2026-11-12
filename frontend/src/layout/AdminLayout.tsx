@@ -50,7 +50,7 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
       className="admin-sidebar"
       aria-label="Primary"
       style={{
-        height: 'calc(100vh - 24px)',
+        height: 'calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom))',
         width: compact ? '80px' : '256px',
         flex: compact ? '0 0 80px' : '0 0 256px',
         zIndex: 60,
@@ -264,6 +264,7 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
 
 export function AdminLayout() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [header, setHeaderState] = useState<{ title: string; subtitle?: string }>({ title: 'Dashboard', subtitle: 'Right now in the reading hall' });
   const [drawer, setDrawer] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -281,6 +282,10 @@ export function AdminLayout() {
     mediaQuery.addEventListener('change', updateViewport);
     return () => mediaQuery.removeEventListener('change', updateViewport);
   }, []);
+
+  useEffect(() => {
+    setDrawer(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
@@ -312,7 +317,7 @@ export function AdminLayout() {
       <BadgeCtx.Provider value={badgeCtx}>
         <div
           style={{
-            minHeight: '100vh',
+            minHeight: '100dvh',
             display: 'flex',
             position: 'relative',
             color: '#172B45',
@@ -322,6 +327,8 @@ export function AdminLayout() {
             background: '#F8F6F0',
             padding: '12px',
             gap: '18px',
+            overflowX: 'clip',
+            boxSizing: 'border-box',
           }}
         >
           {/* Ambient background with orbs + grain */}
@@ -336,10 +343,10 @@ export function AdminLayout() {
           {/* Desktop and tablet sidebar */}
           {sidebarVisible && (
             <>
-              <div className="hidden lg:block" style={{ position: 'sticky', top: '12px', zIndex: 2, alignSelf: 'flex-start', height: 'calc(100vh - 24px)', flex: '0 0 256px' }}>
+              <div className="hidden lg:block" style={{ position: 'sticky', top: '12px', zIndex: 2, alignSelf: 'flex-start', height: 'calc(100dvh - 24px)', flex: '0 0 256px' }}>
                 <Sidebar />
               </div>
-              <div className="hidden md:block lg:hidden" style={{ position: 'sticky', top: '12px', zIndex: 2, alignSelf: 'flex-start', height: 'calc(100vh - 24px)', flex: '0 0 80px' }}>
+              <div className="hidden md:block lg:hidden" style={{ position: 'sticky', top: '12px', zIndex: 2, alignSelf: 'flex-start', height: 'calc(100dvh - 24px)', flex: '0 0 80px' }}>
                 <Sidebar compact />
               </div>
             </>
@@ -347,12 +354,14 @@ export function AdminLayout() {
 
           {/* Mobile Drawer */}
           {drawer && (
-            <div style={{ position: 'fixed', inset: 0, zIndex: 70, display: 'flex' }}>
-              <div
+            <div className="admin-mobile-drawer" style={{ position: 'fixed', inset: 0, zIndex: 70, display: 'flex' }}>
+              <button
+                type="button"
+                aria-label="Close navigation menu"
                 onClick={() => setDrawer(false)}
-                style={{ position: 'absolute', inset: 0, background: 'rgba(3,39,85,0.4)', animation: 'fadeIn .2s both' }}
+                style={{ position: 'absolute', inset: 0, border: 0, background: 'rgba(3,39,85,0.4)', animation: 'fadeIn .2s both' }}
               />
-              <div style={{ position: 'relative', zIndex: 1, padding: '12px' }}>
+              <div className="admin-mobile-drawer-panel" style={{ position: 'relative', zIndex: 1, padding: '12px' }}>
                 <Sidebar onNavigate={() => setDrawer(false)} />
               </div>
             </div>
@@ -360,13 +369,13 @@ export function AdminLayout() {
 
           {/* Main Content Area */}
           <div style={{ flex: 1, minWidth: 0, maxWidth: '1480px', width: '100%', margin: '0 auto', position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            {/* Floating Top Header matching Admin Console.dc.html */}
+            {/* Normal-flow header keeps the route content below it at every viewport. */}
             <header
               className="glass-a glass-keep admin-topbar"
               style={{
-                position: 'sticky',
-                top: '12px',
-                zIndex: 20,
+                position: 'relative',
+                zIndex: 2,
+                minHeight: '72px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '16px',
@@ -388,6 +397,7 @@ export function AdminLayout() {
                   }
                 }}
                 className="admin-topbar-toggle glass-c chip"
+                data-admin-menu
                 aria-label={
                   isMobile
                     ? drawer ? 'Close navigation menu' : 'Open navigation menu'
@@ -421,7 +431,7 @@ export function AdminLayout() {
                 </span>
               </button>
 
-              <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+              <div className="admin-topbar-title" style={{ flex: '1 1 320px', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                   <h1
                     style={{
@@ -460,7 +470,7 @@ export function AdminLayout() {
               </div>
 
               {/* Clock and Alerts bell */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
+              <div className="admin-topbar-meta" style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: '19px', fontWeight: 600, color: '#172B45', fontVariantNumeric: 'tabular-nums' }}>
                     {clockTime}
@@ -473,6 +483,7 @@ export function AdminLayout() {
                 <button
                   type="button"
                   className="admin-topbar-alerts"
+                  data-admin-alerts
                   onClick={() => navigate('/admin/alerts')}
                   aria-label="Alerts"
                   style={{

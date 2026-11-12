@@ -168,8 +168,8 @@ export function Component() {
   );
 
   return (
-    <section style={{ display: 'grid', gap: '16px', maxWidth: '900px', animation: 'rise .35s both' }}>
-      <div className="glass-c" style={{ borderRadius: '20px', padding: '24px' }}>
+    <section className="admin-account-page" style={{ display: 'grid', gap: '16px', maxWidth: '900px', animation: 'rise .35s both' }}>
+      <div className="glass-c admin-account-card" style={{ borderRadius: '20px' }}>
         <div style={{ marginBottom: '18px' }}>
           <h2 style={{ margin: 0, color: '#032755', fontSize: '20px' }}>Change PIN</h2>
           <p style={{ margin: '6px 0 0', color: '#5A6A7F' }}>Your PIN must be six digits and not easy to guess.</p>
@@ -179,13 +179,13 @@ export function Component() {
           {pinInput('New PIN', newPin, setNewPin, 'new-pin')}
           {pinInput('Confirm new PIN', confirmPin, setConfirmPin, 'confirm-pin')}
           {pinError && <p role="alert" style={{ margin: 0, color: '#A12F2F' }}>{pinError}</p>}
-          <button type="submit" disabled={savingPin} style={buttonStyle}>
+          <button className="admin-account-submit" type="submit" disabled={savingPin} style={buttonStyle}>
             {savingPin ? 'Updating...' : 'Change PIN'}
           </button>
         </form>
       </div>
 
-      <div className="glass-c" style={{ borderRadius: '20px', padding: '24px' }}>
+      <div className="glass-c admin-account-card" style={{ borderRadius: '20px' }}>
         <div style={{ marginBottom: '18px' }}>
           <h2 style={{ margin: 0, color: '#032755', fontSize: '20px' }}>Change phone number</h2>
           <p style={{ margin: '6px 0 0', color: '#5A6A7F' }}>
@@ -210,7 +210,7 @@ export function Component() {
           </label>
           {pinInput('Current PIN', phonePin, setPhonePin, 'phone-current-pin')}
           {phoneError && <p role="alert" style={{ margin: 0, color: '#A12F2F' }}>{phoneError}</p>}
-          <button type="submit" disabled={savingPhone} style={buttonStyle}>
+          <button className="admin-account-submit" type="submit" disabled={savingPhone} style={buttonStyle}>
             {savingPhone ? 'Updating...' : 'Change phone'}
           </button>
         </form>
@@ -388,7 +388,7 @@ function BrandingCard() {
   };
 
   return (
-    <div className="glass-c" style={{ borderRadius: '20px', padding: '24px', display: 'grid', gap: '24px' }}>
+    <div className="glass-c admin-account-card" style={{ borderRadius: '20px', display: 'grid', gap: '24px' }}>
       <div>
         <h2 style={{ margin: 0, color: '#032755', fontSize: '20px' }}>Library branding</h2>
         <p style={{ margin: '6px 0 0', color: '#5A6A7F' }}>Customize the name, logo, and contact details shown across the app.</p>
@@ -415,6 +415,7 @@ function BrandingCard() {
         <div>
           <div style={fieldLabelStyle}>Logo (maximum 512 × 512 pixels)</div>
           <div
+            className="admin-account-logo-dropzone"
             onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
             onDrop={onDrop}
@@ -447,7 +448,7 @@ function BrandingCard() {
             Use my logo
           </label>
           {!useLogoAsFavicon && (
-            <button type="button" onClick={() => faviconPicker.current?.click()} style={secondaryButtonStyle}>
+            <button className="admin-account-secondary" type="button" onClick={() => faviconPicker.current?.click()} style={secondaryButtonStyle}>
               {settings.favicon ? 'Replace favicon' : 'Upload favicon'}
               {settings.favicon && ` · ${Math.max(1, Math.round(faviconSize / 1024))} KB`}
             </button>
@@ -457,10 +458,10 @@ function BrandingCard() {
         </div>
 
         {error && <p role="alert" style={{ margin: 0, color: '#A12F2F' }}>{error}</p>}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-          <button type="submit" disabled={savingBranding} style={buttonStyle}>{savingBranding ? 'Saving...' : 'Save branding'}</button>
-          <button type="button" disabled={savingBranding || !settings.logo} onClick={() => setConfirmation('remove')} style={secondaryButtonStyle}>Remove logo</button>
-          <button type="button" disabled={savingBranding} onClick={() => setConfirmation('reset')} style={secondaryButtonStyle}>Reset to defaults</button>
+        <div className="admin-account-actions">
+          <button className="admin-account-submit" type="submit" disabled={savingBranding} style={buttonStyle}>{savingBranding ? 'Saving...' : 'Save branding'}</button>
+          <button className="admin-account-secondary" type="button" disabled={savingBranding || !settings.logo} onClick={() => setConfirmation('remove')} style={secondaryButtonStyle}>Remove logo</button>
+          <button className="admin-account-secondary" type="button" disabled={savingBranding} onClick={() => setConfirmation('reset')} style={secondaryButtonStyle}>Reset to defaults</button>
         </div>
       </form>
 
@@ -470,7 +471,7 @@ function BrandingCard() {
           <input required minLength={2} maxLength={60} value={displayName}
             onChange={(event) => setDisplayName(event.target.value)} style={fieldStyle} />
         </label>
-        <button type="submit" disabled={savingName} style={buttonStyle}>{savingName ? 'Saving...' : 'Save display name'}</button>
+        <button className="admin-account-submit" type="submit" disabled={savingName} style={buttonStyle}>{savingName ? 'Saving...' : 'Save display name'}</button>
       </form>
 
       <ConfirmDialog
@@ -498,18 +499,18 @@ const fieldLabelStyle = {
 };
 
 const secondaryButtonStyle = {
-  minHeight: '40px',
+  minHeight: '46px',
   border: '1px solid rgba(3,39,85,0.16)',
   borderRadius: '10px',
   background: 'rgba(255,255,255,0.75)',
   color: '#24466C',
-  padding: '0 12px',
+  padding: '0 14px',
   fontWeight: 600,
   cursor: 'pointer',
 };
 
 const buttonStyle = {
-  minHeight: '46px',
+  minHeight: '48px',
   border: '1px solid rgba(3,39,85,0.12)',
   borderRadius: '12px',
   background: 'linear-gradient(135deg, #F8C96F, #F8B345)',
@@ -517,4 +518,5 @@ const buttonStyle = {
   fontWeight: 700,
   fontSize: '14px',
   cursor: 'pointer',
+  padding: '0 16px',
 };

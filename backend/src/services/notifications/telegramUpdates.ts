@@ -1,10 +1,13 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import { User } from '../../models/User';
+import { BotState } from '../../models/BotState';
 import {
   sendMessage,
   sendMessageHtml,
   sendReplyKeyboard,
+  TelegramInlineKeyboard,
+  TelegramSendResult,
 } from './providers/telegram';
 import {
   requireLinkedAdmin,
@@ -18,6 +21,13 @@ import {
   ADMIN_REFUSAL_MESSAGE,
 } from './adminBotHandlers';
 import { registerAdminChatCommands } from './telegramCommands';
+import {
+  beginFeeSearch,
+  cancelFeeBotState,
+  consumeFeeSearch,
+  searchFeeStudents,
+  showFeeSearchPrompt,
+} from './feeBotHandlers';
 
 export type TelegramSendMessage = (chatId: string, text: string) => Promise<unknown>;
 
@@ -75,13 +85,10 @@ export async function handleTelegramUpdate(
   const parts = rawText.split(/\s+/);
   const normalizedCommand = parts[0].split('@')[0];
 
-  // 1. /myid command (public)
-  if (normalizedCommand === '/myid') {
-    await send(chatId, `Your Telegram ID: ${chatId}`);
-    return;
-  }
+  if (message.chat.type !== 'private') return;
 
-  // 2. /start command (linking flow)
+  // /start is the one-time account-linking flow; all operational updates below
+  // require a linked, active administrator.
   if (normalizedCommand === '/start') {
     if (message.chat.type !== 'private') return;
     if (parts.length === 1) {
@@ -148,64 +155,94 @@ export async function handleTelegramUpdate(
     return;
   }
 
-  // 3. Admin commands and persistent reply-keyboard labels
+  // Admin commands and persistent reply-keyboard labels
   const isMenu = normalizedCommand === '/menu';
   const isLive = normalizedCommand === '/live' || rawText === '👥 Live seats';
   const isPending = normalizedCommand === '/pending' || rawText === '📝 Pending requests';
   const isUnpaid = normalizedCommand === '/unpaid' || rawText === '💰 Unpaid fees';
+  const isFees = normalizedCommand === '/fees' || rawText === '💰 Fees';
   const isOvertime = normalizedCommand === '/overtime' || rawText === '⏱ Overtime' || rawText === '⏰ Overtime';
   const isHelp = normalizedCommand === '/help';
+  const isMyId = normalizedCommand === '/myid';
+
+  const admin = await requireLinkedAdmin(chatId, message.chat.type);
+  if (!admin) {
+    await send(chatId, ADMIN_REFUSAL_MESSAGE);
+    return;
+  }
+
+  const sendReply = send === sendMessage
+    ? sendReplyKeyboard
+    : async (cid: string, text: string) => {
+        await send(cid, text);
+        return { ok: true };
+      };
+
+  const sendHtml = send === sendMessage
+    ? sendMessageHtml
+    : async (cid: string, text: string) => {
+        await send(cid, text);
+        return { ok: true };
+      };
+  const renderFeeMessage = (
+    text: string,
+    keyboard?: TelegramInlineKeyboard
+  ): Promise<TelegramSendResult> => sendHtml(chatId, text, keyboard);
+
+  const isCommand = normalizedCommand.startsWith('/');
+  if (isMyId) {
+    await send(chatId, `Your Telegram ID: ${chatId}`);
+    return;
+  }
+  if (isFees) {
+    await cancelFeeBotState(chatId);
+    const query = normalizedCommand === '/fees' ? parts.slice(1).join(' ').trim() : '';
+    if (query) await searchFeeStudents(query, renderFeeMessage);
+    else {
+      await beginFeeSearch(chatId);
+      await showFeeSearchPrompt(renderFeeMessage);
+    }
+    return;
+  }
 
   if (isMenu || isLive || isPending || isUnpaid || isOvertime || isHelp) {
-    const admin = await requireLinkedAdmin(chatId, message.chat.type);
-    if (!admin) {
-      await send(chatId, ADMIN_REFUSAL_MESSAGE);
-      return;
-    }
-
-    // Configure dispatch functions based on whether send was customized
-    const sendReply = send === sendMessage
-      ? sendReplyKeyboard
-      : async (cid: string, text: string) => {
-          await send(cid, text);
-          return { ok: true };
-        };
-
-    const sendHtml = send === sendMessage
-      ? sendMessageHtml
-      : async (cid: string, text: string) => {
-          await send(cid, text);
-          return { ok: true };
-        };
-
+    await cancelFeeBotState(chatId);
     if (isMenu) {
       await handleAdminMenu(chatId, sendHtml, sendReply);
       return;
     }
-
     if (isLive) {
       await handleLive(chatId, sendHtml);
       return;
     }
-
     if (isPending) {
       await handlePending(chatId, sendHtml);
       return;
     }
-
     if (isUnpaid) {
       await handleUnpaidFees(chatId, sendHtml);
       return;
     }
-
     if (isOvertime) {
       await handleOvertime(chatId, sendHtml);
       return;
     }
-
     if (isHelp) {
       await handleHelp(chatId, sendReply, sendHtml);
       return;
     }
+  }
+
+  if (isCommand) {
+    await cancelFeeBotState(chatId);
+    return;
+  }
+  const pendingSearch = await BotState.exists({
+    chatId,
+    action: 'fee_search',
+    expiresAt: { $gt: new Date() },
+  });
+  if (pendingSearch) {
+    await consumeFeeSearch(chatId, rawText, renderFeeMessage);
   }
 }

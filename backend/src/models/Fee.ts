@@ -11,6 +11,9 @@ export interface IFee extends Document {
   note: string | null;
   paidAt: Date | null;
   markedBy: mongoose.Types.ObjectId | null;
+  lastReminderAt: Date | null;
+  lastReminderChannel: 'whatsapp' | 'sms' | 'telegram' | null;
+  reminderCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -49,6 +52,13 @@ const feeSchema = new Schema<IFee>(
       ref: 'User',
       default: null,
     },
+    lastReminderAt: { type: Date, default: null },
+    lastReminderChannel: {
+      type: String,
+      enum: ['whatsapp', 'sms', 'telegram'],
+      default: null,
+    },
+    reminderCount: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

@@ -23,6 +23,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/admin/reports': 'Reports',
   '/admin/alerts': 'Alerts',
   '/admin/account': 'Account',
+  '/admin/send': 'Send SMS',
 };
 
 function BrandingMetadata() {
@@ -30,7 +31,8 @@ function BrandingMetadata() {
   const branding = useAppSelector((state) => state.branding.settings);
 
   useEffect(() => {
-    const pageTitle = PAGE_TITLES[pathname] ?? (pathname === '/' ? 'Home' : 'Not found');
+    const pageTitle = PAGE_TITLES[pathname] ??
+      (pathname.startsWith('/admin/send/') ? 'Send SMS' : pathname === '/' ? 'Home' : 'Not found');
     document.title = `${pageTitle} · ${branding.libraryName}`;
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description) description.content = branding.tagline || branding.libraryName;
@@ -113,6 +115,7 @@ export const router = createBrowserRouter([
               { path: '/admin/reports', lazy: () => import('../pages/admin/Reports') },
               { path: '/admin/alerts', lazy: () => import('../pages/admin/Alerts') },
               { path: '/admin/account', lazy: () => import('../pages/admin/Account') },
+              { path: '/admin/send/:token', lazy: () => import('../pages/admin/SendSmsReminder') },
             ],
           },
         ],

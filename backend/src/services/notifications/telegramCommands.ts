@@ -13,6 +13,7 @@ export const DEFAULT_TELEGRAM_COMMANDS: TelegramBotCommand[] = [
 export const ADMIN_TELEGRAM_COMMANDS: TelegramBotCommand[] = [
   { command: 'live', description: 'View live seats' },
   { command: 'pending', description: 'Review pending requests' },
+  { command: 'fees', description: 'Search student fees' },
   { command: 'unpaid', description: 'Review unpaid fees' },
   { command: 'overtime', description: 'View students in overtime' },
   { command: 'menu', description: 'Open the admin menu' },

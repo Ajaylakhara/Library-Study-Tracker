@@ -8,7 +8,7 @@ import { previousMonthString, toMonthString } from '../utils/time';
  * Safe to run multiple times (skips if fee already exists).
  * @param month - "YYYY-MM" (defaults to previous month)
  */
-export async function generateMonthlyFees(month?: string): Promise<{
+export async function generateMonthlyFees(month?: string, studentId?: string): Promise<{
   created: number;
   skipped: number;
   totalAmount: number;
@@ -20,6 +20,7 @@ export async function generateMonthlyFees(month?: string): Promise<{
     status: 'approved',
     isDeleted: false,
     monthlyFee: { $gt: 0 },
+    ...(studentId ? { _id: studentId } : {}),
   });
 
   let created = 0;
