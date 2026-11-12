@@ -41,7 +41,7 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
   const [confirm, setConfirm] = useState(false);
   const [busy,    setBusy]    = useState(false);
   const location  = useLocation();
-  const activeIndex = Math.max(0, ITEMS.findIndex(({ to, end }) => end ? location.pathname === to : location.pathname.startsWith(to)));
+  const activeIndex = ITEMS.findIndex(({ to, end }) => end ? location.pathname === to : location.pathname.startsWith(to));
 
   return (
     <aside
@@ -75,9 +75,11 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
       {/* Nav items */}
       <nav style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: '10px 14px' }} aria-label="Admin">
         <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <span className="nav-pill" aria-hidden="true" style={{ height: '46px', transform: `translateY(${activeIndex * 52}px)` }}>
-            <span className="edge" />
-          </span>
+          {activeIndex >= 0 && (
+            <span className="nav-pill" aria-hidden="true" style={{ height: '46px', transform: `translateY(${activeIndex * 52}px)` }}>
+              <span className="edge" />
+            </span>
+          )}
           {ITEMS.map(({ to, label, icon, end, badge }) => {
             const count = badge ? badges[badge] : 0;
             const isActive = end ? location.pathname === to : location.pathname.startsWith(to);
@@ -186,6 +188,29 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
             </div>
           )}
         </div>
+
+        <NavLink
+          to="/admin/account"
+          title="Account"
+          onClick={onNavigate}
+          aria-current={location.pathname === '/admin/account' ? 'page' : undefined}
+          style={{
+            minHeight: '36px',
+            padding: compact ? '0 6px' : '0 8px',
+            borderRadius: '8px',
+            color: location.pathname === '/admin/account' ? '#F8B345' : '#DDE1E6',
+            background: location.pathname === '/admin/account' ? 'rgba(248,179,69,0.12)' : 'transparent',
+            textDecoration: 'none',
+            fontSize: '13.5px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: compact ? 'center' : 'flex-start',
+            gap: '8px',
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>manage_accounts</span>
+          {!compact && 'Account'}
+        </NavLink>
 
         <button
           type="button"

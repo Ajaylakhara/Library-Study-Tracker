@@ -95,7 +95,10 @@ async function updateAdmin(options: AdminUpdateOptions): Promise<void> {
     const pinHash = await bcrypt.hash(options.pin, 12);
     const result = await User.updateOne(
       { _id: admin._id, role: 'admin', isDeleted: false },
-      { $set: { phone: options.phone, pinHash, failedAttempts: 0, lockedUntil: null } }
+      {
+        $set: { phone: options.phone, pinHash, failedAttempts: 0, lockedUntil: null },
+        $inc: { tokenVersion: 1 },
+      }
     );
     if (result.matchedCount !== 1) {
       throw new AdminUpdateError('The admin record changed before it could be updated. Please retry.');

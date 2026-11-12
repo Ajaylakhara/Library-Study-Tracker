@@ -54,9 +54,9 @@ async function recordFailedLogin(userId: string): Promise<void> {
   );
 }
 
-function signToken(userId: string, role: string): string {
+function signToken(userId: string, role: string, tokenVersion: number): string {
   const expiresIn = role === 'admin' ? config.jwt.adminExpiresIn : config.jwt.studentExpiresIn;
-  return jwt.sign({ userId, role }, config.jwt.secret, { expiresIn } as jwt.SignOptions);
+  return jwt.sign({ userId, role, tokenVersion }, config.jwt.secret, { expiresIn } as jwt.SignOptions);
 }
 
 function setCookieToken(res: Response, token: string, role: string): void {
@@ -139,7 +139,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
     const { phone, pin } = loginSchema.parse(req.body);
     const GENERIC_ERROR = 'Phone or PIN is wrong.';
 
-    const admin = await User.findOne({ phone, role: 'admin', isDeleted: false }).select('+pinHash');
+    const admin = await User.findOne({ phone, role: 'admin', isDeleted: false }).select('+pinHash +tokenVersion');
     const user = admin ?? await User.findByPhone(phone);
 
     if (!user || user.isDeleted) {
@@ -183,7 +183,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       );
     }
 
-    const token = signToken(user._id.toString(), user.role);
+    const token = signToken(user._id.toString(), user.role, user.tokenVersion ?? 0);
     setCookieToken(res, token, user.role);
 
     res.json({

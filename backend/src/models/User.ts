@@ -26,6 +26,7 @@ export interface IUser extends Document {
   telegramLinkExpires?: Date;
   failedAttempts: number;
   lockedUntil: Date | null;
+  tokenVersion: number;
   isDeleted: boolean;
   deletedAt: Date | null;
   createdAt: Date;
@@ -109,6 +110,7 @@ const userSchema = new Schema<IUser>(
     telegramLinkExpires: { type: Date, select: false },
     failedAttempts: { type: Number, default: 0 },
     lockedUntil: { type: Date, default: null },
+    tokenVersion: { type: Number, default: 0, select: false },
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
   },
@@ -164,7 +166,7 @@ userSchema.methods.comparePassword = async function (password: string): Promise<
 
 // Static: find by phone (only active, non-deleted users)
 userSchema.statics.findByPhone = function (phone: string) {
-  return this.findOne({ phone, isDeleted: false }).select('+pinHash +passwordHash');
+  return this.findOne({ phone, isDeleted: false }).select('+pinHash +passwordHash +tokenVersion');
 };
 
 // Static: find by email (for admin)

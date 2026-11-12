@@ -22,6 +22,8 @@ export const ENDPOINTS = {
     changePin: '/me/change-pin',
   },
   admin: {
+    changePin: '/admin/account/change-pin',
+    changePhone: '/admin/account/change-phone',
     telegramStatus: '/admin/telegram/status',
     telegramLink: '/admin/telegram/link',
     telegramDisconnect: '/admin/telegram',

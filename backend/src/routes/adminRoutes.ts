@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
+import { changeAdminPhone, changeAdminPin } from '../controllers/adminAccountController';
 import {
   createAdminTelegramLink,
   deleteAdminTelegramLink,
@@ -42,9 +44,20 @@ import {
 } from '../controllers/adminController';
 
 const router = Router();
+const accountChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { success: false, message: 'Too many account changes. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // All admin routes require admin role
 router.use(authenticate, requireAdmin);
+
+// Account security
+router.post('/account/change-pin', accountChangeLimiter, asyncHandler(changeAdminPin));
+router.post('/account/change-phone', accountChangeLimiter, asyncHandler(changeAdminPhone));
 
 // Telegram
 router.post('/telegram/link', asyncHandler(createAdminTelegramLink));

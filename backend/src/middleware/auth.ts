@@ -12,6 +12,7 @@ export interface AuthRequest extends Request {
 interface JwtPayload {
   userId: string;
   role: string;
+  tokenVersion?: number;
   iat: number;
   exp: number;
 }
@@ -65,9 +66,12 @@ export const authenticate = async (
     }
 
     // Re-fetch user on every request so blocked/deleted users are rejected immediately
-    const user = await User.findById(decoded.userId);
+    const user = await User.findById(decoded.userId).select('+tokenVersion');
     if (!user || user.isDeleted) {
       throw createError('User not found.', 401);
+    }
+    if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+      throw createError('Session expired. Please log in again.', 401);
     }
 
     if (user.status === 'blocked' || user.status === 'rejected') {

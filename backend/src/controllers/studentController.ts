@@ -1,6 +1,5 @@
 import { Response, NextFunction } from 'express';
 import { z } from 'zod';
-import bcrypt from 'bcryptjs';
 import { AuthRequest } from '../middleware/auth';
 import { Session } from '../models/Session';
 import { Seat } from '../models/Seat';
@@ -10,6 +9,7 @@ import { createError } from '../middleware/errorHandler';
 import { diffMinutes, formatDuration, startOfMonthIST, endOfMonthIST } from '../utils/time';
 import { getAssignableSeatNumbers } from '../utils/seatAssignments';
 import { resolveOvertimeAlerts } from '../services/notifications/overtimeActions';
+import { changeUserPin } from '../services/changePin';
 
 // ─── Status ──────────────────────────────────────────────────────────────────
 
@@ -334,15 +334,7 @@ const changePinSchema = z.object({
 export const changePin = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { oldPin, newPin } = changePinSchema.parse(req.body);
-
-    const user = await User.findById(req.user!._id).select('+pinHash');
-    if (!user) throw createError('User not found.', 404);
-
-    const isMatch = await user.comparePin(oldPin);
-    if (!isMatch) throw createError('Current PIN is incorrect.', 401);
-
-    const pinHash = await bcrypt.hash(newPin, 12);
-    await User.findByIdAndUpdate(user._id, { pinHash });
+    await changeUserPin(req.user!._id, oldPin, newPin);
 
     res.json({ success: true, message: 'PIN changed successfully.' });
   } catch (err) {
