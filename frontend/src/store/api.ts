@@ -14,6 +14,11 @@ export function setUnauthorizedHandler(fn: () => void): void {
 const AUTH_PATHS = ['/auth/login', '/auth/register', '/auth/me', '/auth/logout'];
 const REQUEST_TIMEOUT_MS = 20000;
 
+function isExpiredSession(status: number, message: string): boolean {
+  return status === 401 &&
+    /^(authentication required|invalid or expired session|session expired|user not found)\b/i.test(message);
+}
+
 export interface Envelope<T> {
   success: boolean;
   message?: string;
@@ -77,8 +82,8 @@ export async function http<T = unknown>(
   if (!res.ok) {
     const payload = json as ApiErrorPayload | null;
     const message = extractErrorMessage(payload, 'Something went wrong. Please try again.');
-    // 401 = cookie expired; 403 "blocked" = admin blocked this student mid-session.
-    const ended = res.status === 401 || (res.status === 403 && /blocked/i.test(message));
+    // Credential errors such as an incorrect current PIN must not clear a valid session.
+    const ended = isExpiredSession(res.status, message) || (res.status === 403 && /blocked/i.test(message));
     if (ended && !AUTH_PATHS.includes(path)) {
       onUnauthorized?.();
     }
