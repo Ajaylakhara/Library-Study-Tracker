@@ -21,6 +21,10 @@ export interface ISession extends Document {
     overtime: boolean;
     autoCheckout: boolean;
   };
+  overtimeAdminAlertedAt: Date | null;
+  overtimeSnoozedUntil: Date | null;
+  overtimeSnoozeAlertPending: boolean;
+  overtimeRepeatCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -62,6 +66,10 @@ const sessionSchema = new Schema<ISession>(
       overtime: { type: Boolean, default: false },
       autoCheckout: { type: Boolean, default: false },
     },
+    overtimeAdminAlertedAt: { type: Date, default: null },
+    overtimeSnoozedUntil: { type: Date, default: null },
+    overtimeSnoozeAlertPending: { type: Boolean, default: false },
+    overtimeRepeatCount: { type: Number, default: 0, min: 0, max: 6 },
   },
   { timestamps: true }
 );

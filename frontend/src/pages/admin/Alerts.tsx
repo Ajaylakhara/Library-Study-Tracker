@@ -18,13 +18,18 @@ import { Pagination } from '../../components/Pagination';
 import { formatPhone } from '../../helper/formatMinutes';
 import { dateTimeLabel, NOTIFICATION_LABELS } from '../../helper/date';
 import { cn } from '../../helper/cn';
-import type { AdminTelegramLink, AdminTelegramStatus, AppNotification, Pagination as P } from '../../types';
+import type { AdminJobRunStatus, AdminJobsStatus, AdminTelegramLink, AdminTelegramStatus, AppNotification, Pagination as P } from '../../types';
 
 const PAGE_SIZE = 15;
 // Overtime follow-up is temporarily disabled while its delivery method is undecided.
 type Tab = 'failed' | 'all';
 
-const CHANNEL: Record<string, string> = { whatsapp: 'WhatsApp', sms: 'SMS', inapp: 'In-app' };
+const CHANNEL: Record<string, string> = {
+  whatsapp: 'WhatsApp',
+  sms: 'SMS',
+  telegram: 'Telegram',
+  inapp: 'In-app',
+};
 
 function TelegramCard() {
   const dispatch = useAppDispatch();
@@ -194,9 +199,28 @@ export function Component() {
   const [page, setPage] = useState(1);
   const [markingAll, setMarkingAll] = useState(false);
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [jobsStatus, setJobsStatus] = useState<AdminJobsStatus | null>(null);
+  const [jobClock, setJobClock] = useState(Date.now());
   const refreshBadges = useRefreshBadges();
 
   useEffect(() => setPage(1), [tab]);
+
+  useEffect(() => {
+    let active = true;
+    const loadStatus = () => {
+      void get<AdminJobsStatus>(ENDPOINTS.admin.jobsStatus)
+        .then((response) => { if (active) setJobsStatus(response.data); })
+        .catch(() => { if (active) setJobsStatus(null); });
+    };
+    loadStatus();
+    const refresh = setInterval(loadStatus, 60_000);
+    const clock = setInterval(() => setJobClock(Date.now()), 60_000);
+    return () => {
+      active = false;
+      clearInterval(refresh);
+      clearInterval(clock);
+    };
+  }, []);
 
   const { data, loading, error, reload } = useAsync(async () => {
     const unread = await get<unknown>(ENDPOINTS.admin.unreadNotificationCount);
@@ -294,6 +318,8 @@ export function Component() {
       render: (n) =>
         n.lastError ? (
           <span className="font-mono text-[12.5px] text-occupied-fg">{n.lastError}</span>
+        ) : n.warning ? (
+          <span className="font-semibold text-occupied-fg">{n.warning}</span>
         ) : (
           <span className="text-muted">—</span>
         ),
@@ -326,10 +352,33 @@ export function Component() {
 
   const unreadCount = data?.unreadCount ?? 0;
   const hasUnread = data && data.rows.some((r) => r.read === false);
+  const jobRunTimes = jobsStatus
+    ? [jobsStatus.shiftMonitor, jobsStatus.notificationWorker]
+        .map((job: AdminJobRunStatus) => job.lastRunAt ? new Date(job.lastRunAt).getTime() : 0)
+        .filter((timestamp) => timestamp > 0)
+    : [];
+  const lastJobRun = jobRunTimes.length ? Math.max(...jobRunTimes) : null;
+  const minutesSinceJobRun = lastJobRun === null
+    ? null
+    : Math.max(0, Math.floor((jobClock - lastJobRun) / 60_000));
+  const jobRunStale = lastJobRun === null || jobClock - lastJobRun > 5 * 60_000;
 
   return (
     <div className="flex flex-col gap-5">
       <TelegramCard />
+      <div
+        role="status"
+        className={cn(
+          'rounded-xl border px-4 py-3 text-sm font-medium',
+          jobRunStale
+            ? 'border-red-300 bg-red-50 text-red-800'
+            : 'border-line bg-white/70 text-muted'
+        )}
+      >
+        {minutesSinceJobRun === null
+          ? 'Last background check: unavailable'
+          : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`}
+      </div>
       <div className="glass-b flex flex-col gap-3 rounded-2xl p-4 md:flex-row md:items-center md:justify-between">
         <div role="tablist" aria-label="Notification view" className="glass-c flex w-fit gap-1 rounded-[10px] p-1">
           {(['failed', 'all'] as Tab[]).map((t) => {

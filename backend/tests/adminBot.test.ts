@@ -435,6 +435,18 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(sent[0]).toContain('/overtime');
     });
 
+    it('protects background job status with the admin role', async () => {
+      const unauthorized = await request(app).get('/api/admin/jobs/status');
+      expect(unauthorized.status).toBe(401);
+
+      const authorized = await request(app)
+        .get('/api/admin/jobs/status')
+        .set('Cookie', adminCookie);
+      expect(authorized.status).toBe(200);
+      expect(authorized.body.data).toHaveProperty('shiftMonitor');
+      expect(authorized.body.data).toHaveProperty('notificationWorker');
+    });
+
     it('shows the persistent admin menu only to linked admins', async () => {
       const sent: string[] = [];
       await handleTelegramUpdate(
@@ -932,16 +944,15 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         capacity: 70,
       });
 
-      expect(text).toContain('Overtime Alert');
+      expect(text).toContain('Overtime:');
       expect(text).toContain('Aarav &lt;Sharma&gt;');
       expect(text).toContain('Seat 15');
-      expect(text).toContain('4-hour shift');
-      expect(text).toContain('Shift ended 10:30 AM');
+      expect(text).toContain('4-hour shift ended 10:30 AM');
       expect(text).toContain('18 min over');
-      expect(text).toContain('Studying now: 12 / 70');
+      expect(text).toContain('12/70 seats occupied');
     });
 
-    it('builds overtime keyboard with wa.me link and callbacks under 64 bytes', () => {
+    it('builds overtime action buttons with callback data under 64 bytes', () => {
       const sessionId = '65b2f8a91c4d7e0012345678';
       const keyboard = buildOvertimeKeyboard({
         sessionId,
@@ -951,21 +962,18 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       }) as Array<Array<{ text: string; url?: string; callback_data?: string }>>;
 
       expect(keyboard.length).toBe(2);
-      // Row 1: WhatsApp button
-      expect(keyboard[0][0].text).toBe('📲 WhatsApp Priya');
-      expect(keyboard[0][0].url).toContain('https://wa.me/919876543210?text=');
-
-      // Row 2: Mark as sent & Force checkout callbacks
-      expect(keyboard[1][0].text).toBe('✅ Mark as sent');
-      expect(keyboard[1][0].callback_data).toBe(`ot_sent:${sessionId}`);
-      expect(Buffer.byteLength(keyboard[1][0].callback_data!)).toBeLessThan(64);
-
-      expect(keyboard[1][1].text).toBe('🚪 Force checkout');
-      expect(keyboard[1][1].callback_data).toBe(`ot_force:${sessionId}`);
-      expect(Buffer.byteLength(keyboard[1][1].callback_data!)).toBeLessThan(64);
+      expect(keyboard[0][0].text).toBe('🚪 Force checkout');
+      expect(keyboard[0][0].callback_data).toBe(`ot_force:${sessionId}`);
+      expect(keyboard[0][1].text).toBe('📩 Remind student');
+      expect(keyboard[0][1].callback_data).toBe(`ot_remind_student:${sessionId}`);
+      expect(keyboard[1][0].text).toBe('⏳ Wait 15 min');
+      expect(keyboard[1][0].callback_data).toBe(`ot_snooze:${sessionId}`);
+      for (const button of keyboard.flat()) {
+        expect(Buffer.byteLength(button.callback_data ?? '', 'utf8')).toBeLessThanOrEqual(64);
+      }
     });
 
-    it('hides WhatsApp button if student phone is invalid or missing', () => {
+    it('shows all overtime actions even if the student phone is invalid or missing', () => {
       const sessionId = '65b2f8a91c4d7e0012345678';
       const keyboardInvalid = buildOvertimeKeyboard({
         sessionId,
@@ -974,23 +982,43 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         shiftEndsAtIST: '11:00 AM',
       }) as Array<Array<{ text: string; url?: string; callback_data?: string }>>;
 
-      expect(keyboardInvalid.length).toBe(1); // Only row with callback buttons
-      expect(keyboardInvalid[0][0].text).toBe('✅ Mark as sent');
-      expect(keyboardInvalid[0][1].text).toBe('🚪 Force checkout');
+      expect(keyboardInvalid.length).toBe(2);
+      expect(keyboardInvalid[0][0].text).toBe('🚪 Force checkout');
+      expect(keyboardInvalid[0][1].text).toBe('📩 Remind student');
+      expect(keyboardInvalid[1][0].text).toBe('⏳ Wait 15 min');
     });
 
     it('runShiftMonitor is idempotent and fires overtime alert only once per session', async () => {
       await clearTestNotificationsForSession(overtimeSession2._id.toString());
-      await Session.findByIdAndUpdate(overtimeSession2._id, { 'alertsSent.overtime': false });
+      await Session.findByIdAndUpdate(overtimeSession2._id, {
+        'alertsSent.overtime': false,
+        overtimeAdminAlertedAt: null,
+        overtimeSnoozedUntil: null,
+        overtimeSnoozeAlertPending: false,
+        overtimeRepeatCount: 0,
+      });
 
-      // Run 1: Should enqueue overtime alert
-      await runShiftMonitor({ sessionIds: [overtimeSession2._id.toString()] });
+      // Competing and delayed scheduler passes must still create one alert.
+      const lateRunAt = new Date();
+      await Promise.all([
+        runShiftMonitor({ sessionIds: [overtimeSession2._id.toString()], now: lateRunAt }),
+        runShiftMonitor({ sessionIds: [overtimeSession2._id.toString()], now: lateRunAt }),
+      ]);
       const notifsRun1 = await Notification.find({
         sessionId: overtimeSession2._id,
         type: 'overtime_admin',
         channel: 'telegram',
       });
       expect(notifsRun1.length).toBeGreaterThanOrEqual(1);
+      expect(await Notification.exists({
+        sessionId: overtimeSession2._id,
+        type: 'shift_ended',
+        channel: 'inapp',
+      })).not.toBeNull();
+      expect(await Notification.exists({
+        sessionId: overtimeSession2._id,
+        type: 'shift_reminder',
+      })).toBeNull();
 
       // Run 2: Idempotent - should NOT enqueue again
       await runShiftMonitor({ sessionIds: [overtimeSession2._id.toString()] });
@@ -1000,6 +1028,47 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
         channel: 'telegram',
       });
       expect(notifsRun2.length).toBe(notifsRun1.length);
+
+      const alertedSession = await Session.findById(overtimeSession2._id);
+      expect(alertedSession?.overtimeAdminAlertedAt).toEqual(lateRunAt);
+      const snoozeUntil = new Date(lateRunAt.getTime() + 15 * 60_000);
+      await Session.findByIdAndUpdate(overtimeSession2._id, {
+        overtimeSnoozedUntil: snoozeUntil,
+        overtimeSnoozeAlertPending: true,
+      });
+      await runShiftMonitor({
+        sessionIds: [overtimeSession2._id.toString()],
+        now: new Date(lateRunAt.getTime() + 10 * 60_000),
+      });
+      expect((await Session.findById(overtimeSession2._id))?.overtimeAdminAlertedAt).toEqual(lateRunAt);
+
+      const afterSnooze = new Date(lateRunAt.getTime() + 16 * 60_000);
+      await runShiftMonitor({ sessionIds: [overtimeSession2._id.toString()], now: afterSnooze });
+      const resumed = await Session.findById(overtimeSession2._id);
+      expect(resumed?.overtimeAdminAlertedAt).toEqual(afterSnooze);
+      expect(resumed?.overtimeRepeatCount).toBe(1);
+    });
+
+    it('does not alert for a session that has already checked out', async () => {
+      const completed = await Session.create({
+        student: testStudentUser._id,
+        seat: testSeat1._id,
+        shiftHours: 4,
+        checkInAt: new Date(Date.now() - 3 * 60 * 60_000),
+        shiftEndsAt: new Date(Date.now() - 60 * 60_000),
+        checkOutAt: new Date(Date.now() - 30 * 60_000),
+        status: 'completed',
+        checkoutType: 'manual',
+      });
+      try {
+        await runShiftMonitor({ sessionIds: [completed._id.toString()] });
+        expect(await Notification.exists({
+          sessionId: completed._id,
+          type: 'overtime_admin',
+        })).toBeNull();
+      } finally {
+        await Session.deleteOne({ _id: completed._id });
+      }
     });
 
     it('processQueuedNotifications loads student details from session and sends with keyboard', async () => {
@@ -1020,10 +1089,52 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       });
 
       // Verify at least one message was sent with buttons
-      const overtimeSent = sentMessages.find((m) => m.text.includes('Overtime Alert'));
+      const overtimeSent = sentMessages.find((m) => m.text.includes('Overtime:'));
       expect(overtimeSent).toBeDefined();
       expect(overtimeSent?.keyboard).toBeDefined();
       expect(overtimeSent?.keyboard.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('shows all overtime actions for each student in the bot list', async () => {
+      let keyboard: any;
+      await handleOvertime(
+        linkedAdminChatId,
+        async (_chatId, _text, buttons) => {
+          keyboard = buttons;
+          return { ok: true };
+        }
+      );
+      const callbacks = keyboard.flat()
+        .map((button: any) => button.callback_data)
+        .filter(Boolean);
+      expect(callbacks).toContain(`ot_force:${overtimeSession2._id}`);
+      expect(callbacks).toContain(`ot_remind_student:${overtimeSession2._id}`);
+      expect(callbacks).toContain(`ot_snooze:${overtimeSession2._id}`);
+    });
+
+    it('stores the Telegram API error text after three failed worker attempts', async () => {
+      const failureNotification = await Notification.create({
+        user: testAdminUser._id,
+        type: 'shift_reminder',
+        channel: 'telegram',
+        status: 'queued',
+        message: 'Test queued message',
+        attempts: 0,
+      });
+      testNotificationIds.push(failureNotification._id.toString());
+      const failingSender = async () => {
+        throw new Error('Telegram API returned: chat is temporarily unavailable');
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await processQueuedNotifications(failingSender as any, {
+          notificationIds: [failureNotification._id.toString()],
+        });
+      }
+      const updated = await Notification.findById(failureNotification._id);
+      expect(updated?.status).toBe('failed');
+      expect(updated?.attempts).toBe(3);
+      expect(updated?.lastError).toBe('Telegram API returned: chat is temporarily unavailable');
+      await Notification.deleteOne({ _id: failureNotification._id });
     });
 
     it('treats 403 (blocked bot) as permanent failure immediately without retry', async () => {

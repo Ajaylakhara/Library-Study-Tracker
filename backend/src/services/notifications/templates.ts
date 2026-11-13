@@ -43,7 +43,7 @@ export const templates: Record<NotificationType, TemplateConfig> = {
   overtime_admin: {
     templateKey: 'OVERTIME_ADMIN',
     buildMessage: (vars) =>
-      `[${libraryName(vars)} ADMIN ALERT] Student ${vars.studentName} (Seat ${vars.seatNumber}) is in overtime by 15+ minutes. Shift ended at ${vars.shiftEndsAt}.`,
+      `[${libraryName(vars)}] ⏰ Overtime: ${vars.studentName}, Seat ${vars.seatNumber}. ${vars.shiftLabel ?? 'Scheduled'} shift ended ${vars.shiftEndsAt}, ${vars.minutesPastEnd ?? 15} min over.`,
   },
   fee_generated_admin: {
     templateKey: 'FEE_GENERATED_ADMIN',

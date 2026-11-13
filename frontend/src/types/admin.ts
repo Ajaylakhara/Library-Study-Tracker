@@ -127,16 +127,30 @@ export interface AppNotification {
   _id: string;
   user: { _id: string; name: string; phone: string } | null;
   type: string;
-  channel: 'whatsapp' | 'sms' | 'inapp';
-  status: 'queued' | 'sent' | 'failed';
+  channel: 'whatsapp' | 'sms' | 'telegram' | 'inapp';
+  status: 'queued' | 'sent' | 'failed' | 'manual_pending';
   attempts: number;
   lastError: string | null;
+  warning?: string | null;
   read?: boolean;
   readAt?: string | null;
   studentNameSnapshot?: string | null;
   studentPhoneSnapshot?: string | null;
   updatedAt: string;
   createdAt: string;
+}
+
+export interface AdminJobRunStatus {
+  lastRunAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  processed: number;
+  error: string | null;
+}
+
+export interface AdminJobsStatus {
+  shiftMonitor: AdminJobRunStatus;
+  notificationWorker: AdminJobRunStatus;
 }
 
 /*

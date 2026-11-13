@@ -70,6 +70,11 @@ const parsedDefaultMonthlyFee = defaultMonthlyFee ? Number(defaultMonthlyFee) : 
 if (!Number.isFinite(parsedDefaultMonthlyFee) || parsedDefaultMonthlyFee < 0) {
   throw new Error('DEFAULT_MONTHLY_FEE must be a non-negative number.');
 }
+const overtimeRepeatMinutes = process.env.OVERTIME_REPEAT_MINUTES?.trim();
+const parsedOvertimeRepeatMinutes = overtimeRepeatMinutes ? Number(overtimeRepeatMinutes) : 0;
+if (!Number.isInteger(parsedOvertimeRepeatMinutes) || parsedOvertimeRepeatMinutes < 0) {
+  throw new Error('OVERTIME_REPEAT_MINUTES must be a non-negative integer.');
+}
 
 if (!rawMongoUri) {
   throw new Error(
@@ -94,6 +99,9 @@ export const config = {
 
   authRateLimitMax: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '20', 10),
   defaultMonthlyFee: parsedDefaultMonthlyFee,
+  cronSecret: process.env.CRON_SECRET ?? '',
+  runJobsInProcess: process.env.RUN_JOBS_IN_PROCESS?.trim().toLowerCase() !== 'false',
+  overtimeRepeatMinutes: parsedOvertimeRepeatMinutes,
 
   // DEV ONLY: lets the client skip login by sending X-Dev-Role. Ignored in production.
   devAuthBypass: process.env.DEV_AUTH_BYPASS === 'true' && process.env.NODE_ENV !== 'production',

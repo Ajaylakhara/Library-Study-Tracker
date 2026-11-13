@@ -54,6 +54,7 @@ export const ENDPOINTS = {
     reportStudents: '/admin/reports/students',
     exportAttendanceCsv: '/admin/export/attendance.csv',
     notifications: '/admin/notifications',
+    jobsStatus: '/admin/jobs/status',
     failedNotifications: '/admin/notifications/failed',
     // Temporarily disabled with admin overtime follow-up alerts.
     // needsActionNotifications: '/admin/notifications/needs-action',

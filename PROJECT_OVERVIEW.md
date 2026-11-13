@@ -148,15 +148,16 @@ including seat/session conflicts and duplicate fee protection.
 
 ### Background jobs
 
-The jobs run inside the backend process. Run one backend instance in
-production, because starting multiple instances would also start multiple
-copies of these jobs.
+On an always-on server, the jobs can run inside the backend process. On Vercel,
+in-process scheduling is disabled; configure a minute-level external scheduler
+to call the authenticated cron endpoint described under Deployment notes.
 
-- **Shift monitor:** every minute; enqueues an eligible reminder shortly before
-  a shift ends, a shift-ended notification, and an admin overtime alert after
-  15 minutes.
+- **Shift monitor:** catches up on missed runs; enqueues a reminder only while
+  the shift is ending soon, a shift-ended notification after end, and an admin
+  overtime alert after 15 minutes. Overtime alerts can be snoozed for 15 minutes
+  and optionally repeated (up to six times).
 - **Notification worker:** every 30 seconds; sends queued Telegram messages,
-  marks in-app notifications delivered, and retries supported queued sends up
+  marks in-app notifications delivered, and attempts failed Telegram sends up
   to three times.
 - **Monthly fees:** at 00:01 IST on the first day of each month; generates
   unpaid fee records for the previous month for approved students with a
@@ -336,4 +337,20 @@ tests at the only copy of production data.
 - Set production cookie/proxy settings correctly and keep credentials out of
   source control.
 - Configure Telegram's webhook only when a public HTTPS endpoint is available.
-- Run one backend instance while scheduled jobs are process-local.
+- For serverless scheduling, set a strong random `CRON_SECRET` in the backend
+  environment. Call `POST https://<backend-host>/api/cron/tick` once per minute
+  using a Bearer authorization value containing that secret, or the
+  `x-cron-secret` header.
+  The combined endpoint runs shift monitoring, then the notification worker
+  for up to three passes. Separate `GET` and `POST` endpoints are also
+  available at `/api/cron/shift-monitor` and
+  `/api/cron/notification-worker`.
+- Send the configured secret in either the `Authorization` header using the
+  `Bearer` scheme or the `x-cron-secret` header.
+- Configure cron-job.org, Vercel Pro Cron, or another scheduler to use the
+  `/api/cron/tick` URL and secret header. Vercel Hobby cron is once per day;
+  use an external scheduler for the required minute-level jobs.
+- Set `RUN_JOBS_IN_PROCESS=false` on serverless deployments. On an always-on
+  server, set it to `true` (the default) and run only one backend instance.
+- `OVERTIME_REPEAT_MINUTES=0` disables automatic repeat alerts; positive
+  values set the repeat interval, with a maximum of six repeats per session.

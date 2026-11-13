@@ -11,6 +11,7 @@ import studentRoutes from './routes/studentRoutes';
 import adminRoutes from './routes/adminRoutes';
 import telegramRoutes from './routes/telegramRoutes';
 import settingsRoutes from './routes/settingsRoutes';
+import cronRoutes from './routes/cronRoutes';
 
 const app = express();
 
@@ -25,7 +26,7 @@ app.use(
     origin: config.clientUrl,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
   })
 );
 
@@ -77,6 +78,9 @@ app.get('/health/db', async (_req, res) => {
 });
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
+// Cron handlers authenticate before connecting so an unconfigured endpoint
+// fails closed without initiating database work.
+app.use('/api/cron', cronRoutes);
 app.use('/api', (req, _res, next) => {
   if (
     process.env.VERCEL &&

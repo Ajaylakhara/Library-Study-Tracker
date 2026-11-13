@@ -24,6 +24,7 @@ import { config } from '../../config';
 import { performForceCheckout } from '../forceCheckout';
 export { performForceCheckout } from '../forceCheckout';
 import { markFeePaid, updateStudentStatus } from '../adminActions';
+import { remindOvertimeStudent, snoozeOvertimeAlert } from './overtimeActions';
 import { listFees, summarizeFees } from '../feeQueries';
 import {
   beginFeeSearch,
@@ -39,7 +40,6 @@ import {
   showFeeStudent,
 } from './feeBotHandlers';
 import { diffMinutes, formatDuration, previousMonthString, toMonthString, TZ } from '../../utils/time';
-import { buildWhatsAppUrl } from '../../utils/phone';
 import {
   sendMessageHtml,
   sendReplyKeyboard,
@@ -306,6 +306,7 @@ export async function handleOvertime(
   }
 
   let text = `⏰ <b>Students in Overtime</b> (${overtimeSessions.length})\n\n`;
+  const keyboard: TelegramInlineButton[][] = [];
 
   for (const s of overtimeSessions) {
     const studentName = escapeHtml(s.student?.name || 'Unknown');
@@ -315,9 +316,16 @@ export async function handleOvertime(
 
     text += `• <b>${studentName}</b> · Seat ${seatNumber}\n`;
     text += `  ${s.shiftHours}h shift · ended ${shiftEndsAtIST} · ⚠️ <b>${minutesOver}m over</b>\n`;
+    keyboard.push([
+      { text: '🚪 Force checkout', callback_data: callbackData('ot_force', s._id.toString()) },
+      { text: '📩 Remind student', callback_data: callbackData('ot_remind_student', s._id.toString()) },
+    ]);
+    keyboard.push([
+      { text: '⏳ Wait 15 min', callback_data: callbackData('ot_snooze', s._id.toString()) },
+    ]);
   }
 
-  await sendMsg(chatId, text, homeKeyboard());
+  await sendMsg(chatId, text, withHomeButton(keyboard));
 }
 
 /**
@@ -342,19 +350,11 @@ export function buildOvertimeAlertText(opts: {
     capacity,
   } = opts;
 
-  return (
-    `⏰ <b>Overtime Alert</b>\n\n` +
-    `<b>${escapeHtml(studentName)}</b> · Seat ${seatNumber} · ${shiftLabel} shift\n` +
-    `Shift ended ${shiftEndsAtIST} · ⚠️ <b>${minutesOver} min over</b>\n` +
-    `Studying now: ${studyingNow} / ${capacity}`
-  );
+  return `⏰ Overtime: <b>${escapeHtml(studentName)}</b>, Seat ${seatNumber}. ${shiftLabel} shift ended ${shiftEndsAtIST}, <b>${minutesOver} min over</b>. (${studyingNow}/${capacity} seats occupied)`;
 }
 
 /**
- * Builds inline buttons for an overtime alert:
- * - [📲 WhatsApp <firstName>] (if normalized Indian phone is valid)
- * - [✅ Mark as sent] (callback_data: ot:sent:<sessionId>)
- * - [🚪 Force checkout] (callback_data: ot:force:<sessionId>)
+ * Builds the admin actions shown on each overtime alert.
  */
 export function buildOvertimeKeyboard(opts: {
   sessionId: string;
@@ -362,23 +362,14 @@ export function buildOvertimeKeyboard(opts: {
   studentName: string;
   shiftEndsAtIST: string;
 }): TelegramInlineKeyboard {
-  const { sessionId, studentPhone, studentName, shiftEndsAtIST } = opts;
-  const firstName = studentName.trim().split(/\s+/)[0] || studentName;
-  const keyboard: TelegramInlineButton[][] = [];
-
-  const waMessage = `Hi ${firstName}, your study shift ended at ${shiftEndsAtIST} and you are in overtime. Please check out or contact the librarian.`;
-  const waUrl = buildWhatsAppUrl(studentPhone, waMessage);
-
-  if (waUrl) {
-    keyboard.push([{ text: `📲 WhatsApp ${firstName}`, url: waUrl }]);
-  }
-
-  keyboard.push([
-    { text: '✅ Mark as sent', callback_data: callbackData('ot_sent', sessionId) },
-    { text: '🚪 Force checkout', callback_data: callbackData('ot_force', sessionId) },
-  ]);
-
-  return keyboard;
+  const { sessionId } = opts;
+  return [
+    [
+      { text: '🚪 Force checkout', callback_data: callbackData('ot_force', sessionId) },
+      { text: '📩 Remind student', callback_data: callbackData('ot_remind_student', sessionId) },
+    ],
+    [{ text: '⏳ Wait 15 min', callback_data: callbackData('ot_snooze', sessionId) }],
+  ];
 }
 
 // ─── Shared Business Logic: "Mark as sent" (Requirement 1) ───────────────────
@@ -728,6 +719,24 @@ export async function handleBotCallbackQuery(
       await complete(
         'Marked as sent.',
         `${originalText}\n\n✅ Sent by ${escapeHtml(admin.name)}, ${result.markedAt}`
+      );
+      return;
+    }
+
+    if (action === 'ot_remind_student') {
+      const telegramLinked = await remindOvertimeStudent(id);
+      await complete(
+        'Student reminded.',
+        `${originalText}\n\n📩 In-app reminder queued${telegramLinked ? ' with Telegram delivery' : ''}.`
+      );
+      return;
+    }
+
+    if (action === 'ot_snooze') {
+      const snoozed = await snoozeOvertimeAlert(id);
+      await complete(
+        snoozed ? 'Alert snoozed for 15 minutes.' : 'Session is no longer active.',
+        `${originalText}\n\n${snoozed ? '⏳ Next alert scheduled after 15 minutes.' : 'ℹ️ Session is no longer active.'}`
       );
       return;
     }

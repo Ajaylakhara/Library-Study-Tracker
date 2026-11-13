@@ -151,18 +151,20 @@ async function callTelegramApi(
 
   // 403 — bot blocked by user: permanent failure, do not retry
   if (response.status === 403 || result.error_code === 403) {
-    logTelegramError(method, 403, result.description ?? 'bot blocked by user');
-    return { ok: false, errorCode: 403, description: 'bot blocked by user', raw: result };
+    const description = result.description ?? 'bot blocked by user';
+    logTelegramError(method, 403, description);
+    return { ok: false, errorCode: 403, description, raw: result };
   }
 
   // 429 — rate limited: surface retry_after
   if (response.status === 429 || result.error_code === 429) {
     const retryAfter = result.parameters?.retry_after ?? 1;
-    logTelegramError(method, 429, result.description ?? `rate limited; retry after ${retryAfter}s`);
+    const description = result.description ?? `rate limited; retry after ${retryAfter}s`;
+    logTelegramError(method, 429, description);
     return {
       ok: false,
       errorCode: 429,
-      description: `Too many requests. Retry after ${retryAfter}s.`,
+      description,
       retryAfter,
       raw: result,
     };

@@ -26,6 +26,7 @@ export interface INotification extends Document {
   status: NotificationStatus;
   attempts: number;
   lastError: string | null;
+  warning: string | null;
   providerMessageId: string | null;
   sentAt: Date | null;
   sentBy: mongoose.Types.ObjectId | null;
@@ -84,6 +85,7 @@ const notificationSchema = new Schema<INotification>(
     },
     attempts: { type: Number, default: 0 },
     lastError: { type: String, default: null },
+    warning: { type: String, default: null },
     providerMessageId: { type: String, default: null },
     sentAt: { type: Date, default: null },
     sentBy: {

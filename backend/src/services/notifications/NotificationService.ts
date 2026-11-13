@@ -19,6 +19,7 @@ export interface EnqueueOptions {
   studentPhoneSnapshot?: string | null;
   message?: string;
   includeInApp?: boolean;
+  forceTelegram?: boolean;
 }
 
 interface NotificationTarget {
@@ -62,7 +63,12 @@ export class NotificationService {
       attempts: 0,
     };
 
-    const targets = NotificationService.resolveTargets(user, type, opts.includeInApp !== false);
+    const targets = NotificationService.resolveTargets(
+      user,
+      type,
+      opts.includeInApp !== false,
+      opts.forceTelegram === true
+    );
     for (const target of targets) {
       try {
         await Notification.create({
@@ -72,7 +78,9 @@ export class NotificationService {
         });
       } catch (error: unknown) {
         if ((error as { code?: number }).code !== 11000) {
-          console.error(`[NotificationService] Failed to enqueue ${type}/${target.channel}:`, error);
+          console.error(
+            `[NotificationService] Failed to enqueue ${type}/${target.channel} (${error instanceof Error ? error.name : 'UnknownError'}).`
+          );
         }
       }
     }
@@ -82,8 +90,7 @@ export class NotificationService {
     opts: Omit<EnqueueOptions, 'userId'> & {
       studentName?: string;
       studentPhone?: string;
-      manualStudentId?: mongoose.Types.ObjectId | string;
-      manualMessage?: string;
+      repeat?: boolean;
     }
   ): Promise<void> {
     const admins = await User.find({
@@ -98,34 +105,67 @@ export class NotificationService {
       opts.studentPhone ?? (opts.vars?.studentPhone ? String(opts.vars.studentPhone) : null);
 
     for (const admin of admins) {
-      await NotificationService.enqueue({
-        ...opts,
-        userId: admin._id,
-        studentNameSnapshot,
-        studentPhoneSnapshot,
-      });
-
-      if (admin.telegramChatId) {
-        await NotificationService.createOne({
-          ...opts,
-          userId: admin._id,
-          channel: 'telegram',
-          status: 'queued',
-          studentNameSnapshot,
-          studentPhoneSnapshot,
-        });
+      const channels: NotificationChannel[] = ['inapp'];
+      if (admin.telegramChatId) channels.push('telegram');
+      for (const channel of channels) {
+        const create = async () => {
+          await NotificationService.createOne({
+            userId: admin._id,
+            type: opts.type,
+            vars: opts.vars,
+            sessionId: opts.sessionId,
+            feeId: opts.feeId,
+            studentNameSnapshot,
+            studentPhoneSnapshot,
+            message: opts.message,
+            channel,
+            status: 'queued',
+          });
+        };
+        if (opts.repeat && opts.type === 'overtime_admin' && opts.sessionId) {
+          const brandedVars = {
+            ...opts.vars,
+            libraryName: opts.vars?.libraryName ?? await getLibraryNameOrDefault(),
+          };
+          const message = opts.message ?? templates[opts.type].buildMessage(brandedVars);
+          const refreshed = await Notification.findOneAndUpdate(
+            {
+              user: admin._id,
+              type: opts.type,
+              sessionId: opts.sessionId,
+              channel,
+            },
+            {
+              $set: {
+                vars: brandedVars,
+                message,
+                status: 'queued',
+                attempts: 0,
+                lastError: null,
+                warning: null,
+                sentAt: null,
+                read: false,
+                readAt: null,
+                actionStatus: 'open',
+                resolvedAt: null,
+              },
+            },
+            { new: true }
+          );
+          if (!refreshed) await create();
+        } else {
+          await create();
+        }
       }
     }
 
-    if (opts.manualStudentId && (opts.type === 'overtime_admin')) {
-      await NotificationService.enqueueManualOvertime(opts, studentNameSnapshot, studentPhoneSnapshot);
-    }
   }
 
   private static resolveTargets(
     user: IUser,
     type: NotificationType,
-    includeInApp: boolean
+    includeInApp: boolean,
+    forceTelegram: boolean
   ): NotificationTarget[] {
     const targets: NotificationTarget[] = includeInApp
       ? [{ channel: 'inapp', status: 'queued' }]
@@ -134,6 +174,7 @@ export class NotificationService {
 
     const canSendTelegram =
       type === 'approved' ||
+      forceTelegram ||
       (user.preferredChannel === 'telegram' &&
         ['shift_reminder', 'shift_ended', 'fee_unpaid', 'overtime_admin'].includes(type));
     if (user.telegramChatId && canSendTelegram) {
@@ -148,37 +189,6 @@ export class NotificationService {
       targets.push({ channel, status: 'manual_pending' });
     }
     return targets;
-  }
-
-  private static async enqueueManualOvertime(
-    opts: Omit<EnqueueOptions, 'userId'> & {
-      manualStudentId?: mongoose.Types.ObjectId | string;
-      manualMessage?: string;
-    },
-    studentNameSnapshot: string | null,
-    studentPhoneSnapshot: string | null
-  ): Promise<void> {
-    const student = await User.findOne({
-      _id: opts.manualStudentId,
-      role: 'student',
-      isDeleted: false,
-    }).select('+telegramChatId');
-    if (!student) return;
-
-    const manualText =
-      opts.manualMessage ??
-      `Hi ${student.name}, your study shift ended at ${opts.vars?.shiftEndsAt ?? 'the scheduled time'} and you are in overtime. Please check out or contact the librarian.`;
-
-    await NotificationService.enqueue({
-      userId: student._id,
-      type: 'overtime_admin',
-      vars: opts.vars,
-      sessionId: opts.sessionId,
-      studentNameSnapshot: studentNameSnapshot ?? student.name,
-      studentPhoneSnapshot: studentPhoneSnapshot ?? student.phone ?? null,
-      message: manualText,
-      includeInApp: false,
-    });
   }
 
   private static async createOne(
@@ -218,7 +228,9 @@ export class NotificationService {
       });
     } catch (error: unknown) {
       if ((error as { code?: number }).code !== 11000) {
-        console.error(`[NotificationService] Failed to enqueue ${type}/${channel}:`, error);
+        console.error(
+          `[NotificationService] Failed to enqueue ${type}/${channel} (${error instanceof Error ? error.name : 'UnknownError'}).`
+        );
       }
     }
   }

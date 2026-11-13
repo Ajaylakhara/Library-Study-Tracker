@@ -15,6 +15,13 @@ const MAX_ATTEMPTS = 3;
 
 export interface ProcessQueuedNotificationOptions {
   notificationIds?: readonly string[];
+  maxDurationMs?: number;
+}
+
+export interface NotificationWorkerResult {
+  processed: number;
+  sent: number;
+  errors: number;
 }
 
 export async function processQueuedNotifications(
@@ -25,7 +32,8 @@ export async function processQueuedNotifications(
     parseMode?: 'HTML'
   ) => Promise<void> = telegramProvider.sendMessage.bind(telegramProvider),
   options: ProcessQueuedNotificationOptions = {}
-): Promise<void> {
+): Promise<NotificationWorkerResult> {
+  const startedAt = Date.now();
   const query: Record<string, unknown> = {
     status: 'queued',
     attempts: { $lt: MAX_ATTEMPTS },
@@ -38,7 +46,10 @@ export async function processQueuedNotifications(
     .limit(50)
     .populate({ path: 'user', select: 'phone name isDeleted +telegramChatId' });
 
+  const result: NotificationWorkerResult = { processed: 0, sent: 0, errors: 0 };
   for (const notif of pending) {
+    if (options.maxDurationMs !== undefined && Date.now() - startedAt >= options.maxDurationMs) break;
+    result.processed++;
     const user = notif.user as unknown as {
       phone: string;
       name: string;
@@ -67,8 +78,9 @@ export async function processQueuedNotifications(
           status: 'sent',
           sentAt: new Date(),
           message: baseMessage,
-          lastError: null,
+          lastError: notif.warning ? notif.lastError : null,
         });
+        result.sent++;
         continue;
       }
 
@@ -142,7 +154,9 @@ export async function processQueuedNotifications(
         message: messageToSend,
         lastError: null,
       });
+      result.sent++;
     } catch (err: unknown) {
+      result.errors++;
       const error = err instanceof Error ? err : new Error(String(err));
       const errorCode = (err as { errorCode?: number })?.errorCode;
       const retryAfter = (err as { retryAfter?: number })?.retryAfter;
@@ -157,7 +171,7 @@ export async function processQueuedNotifications(
         await Notification.findByIdAndUpdate(notif._id, {
           status: 'failed',
           attempts: MAX_ATTEMPTS,
-          lastError: 'bot blocked by user',
+          lastError: error.message,
         });
         continue;
       }
@@ -176,10 +190,12 @@ export async function processQueuedNotifications(
       });
 
       if (isFinal) {
-        console.error(
-          `[NotificationWorker] Notification ${notif._id} (${notif.type}) permanently failed after ${MAX_ATTEMPTS} attempts.`
-        );
+        console.error(`[NotificationWorker] A ${notif.type} notification permanently failed after ${MAX_ATTEMPTS} attempts.`);
       }
     }
   }
+  console.info(
+    `[NotificationWorker] Run complete: processed=${result.processed}, sent=${result.sent}, errors=${result.errors}.`
+  );
+  return result;
 }
