@@ -159,10 +159,20 @@ function smsTokenSecret(): string {
   return config.smsActionTokenSecret;
 }
 
+export function validateSmsActionConfiguration(): void {
+  smsTokenSecret();
+}
+
 function signSmsAction(notificationId: string, expiresAt: number): string {
   const payload = `${notificationId}.${expiresAt}`;
   const signature = createHmac('sha256', smsTokenSecret()).update(payload).digest('base64url');
   return `${Buffer.from(payload).toString('base64url')}.${signature}`;
+}
+
+export function createSmsActionUrl(notificationId: string): string {
+  const token = signSmsAction(notificationId, Date.now() + REMINDER_WINDOW_MS);
+  const clientUrl = config.clientUrl.replace(/\/+$/, '');
+  return `${clientUrl}/admin/send/${token}`;
 }
 
 function verifySmsAction(token: string): { notificationId: string; expiresAt: number } {
@@ -290,15 +300,12 @@ export async function sendReminder(input: {
     };
   }
 
-  const expiresAt = Date.now() + REMINDER_WINDOW_MS;
-  const token = signSmsAction(notification._id.toString(), expiresAt);
-  const clientUrl = config.clientUrl.replace(/\/+$/, '');
   const digits = prepared.phone.replace(/\D/g, '');
   return {
     notificationId: notification._id.toString(),
     channel: input.channel,
     message,
-    url: `${clientUrl}/admin/send/${token}`,
+    url: createSmsActionUrl(notification._id.toString()),
     smsUri: `sms:${prepared.phone}?body=${encodeURIComponent(message)}`,
   };
 }
@@ -312,7 +319,7 @@ export async function getSmsAction(token: string): Promise<{
   const { notificationId } = verifySmsAction(token);
   const notification = await Notification.findOne({
     _id: notificationId,
-    type: 'fee_unpaid',
+    type: { $in: ['fee_unpaid', 'shift_ended'] },
     channel: 'sms',
     status: 'manual_pending',
   });
@@ -334,7 +341,7 @@ export async function markSent(
   const notification = await Notification.findOneAndUpdate(
     {
       _id: notificationId,
-      type: 'fee_unpaid',
+      type: { $in: ['fee_unpaid', 'shift_ended'] },
       channel: { $in: ['whatsapp', 'sms'] },
       status: 'manual_pending',
     },
@@ -366,7 +373,7 @@ export async function markSent(
 
   const existing = await Notification.findOne({
     _id: notificationId,
-    type: 'fee_unpaid',
+    type: { $in: ['fee_unpaid', 'shift_ended'] },
     channel: { $in: ['whatsapp', 'sms'] },
     status: 'sent',
   });

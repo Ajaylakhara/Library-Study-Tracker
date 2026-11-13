@@ -149,6 +149,8 @@ export interface AdminJobRunStatus {
 }
 
 export interface AdminJobsStatus {
+  schedulerMode: 'external' | 'in-process' | 'disabled';
+  cronConfigured: boolean;
   shiftMonitor: AdminJobRunStatus;
   notificationWorker: AdminJobRunStatus;
 }

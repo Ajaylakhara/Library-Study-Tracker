@@ -200,6 +200,7 @@ export function Component() {
   const [markingAll, setMarkingAll] = useState(false);
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [jobsStatus, setJobsStatus] = useState<AdminJobsStatus | null>(null);
+  const [jobsStatusError, setJobsStatusError] = useState<string | null>(null);
   const [jobClock, setJobClock] = useState(Date.now());
   const refreshBadges = useRefreshBadges();
 
@@ -209,8 +210,18 @@ export function Component() {
     let active = true;
     const loadStatus = () => {
       void get<AdminJobsStatus>(ENDPOINTS.admin.jobsStatus)
-        .then((response) => { if (active) setJobsStatus(response.data); })
-        .catch(() => { if (active) setJobsStatus(null); });
+        .then((response) => {
+          if (active) {
+            setJobsStatus(response.data);
+            setJobsStatusError(null);
+          }
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            setJobsStatus(null);
+            setJobsStatusError(error instanceof Error ? error.message : 'Unknown error');
+          }
+        });
     };
     loadStatus();
     const refresh = setInterval(loadStatus, 60_000);
@@ -352,16 +363,38 @@ export function Component() {
 
   const unreadCount = data?.unreadCount ?? 0;
   const hasUnread = data && data.rows.some((r) => r.read === false);
-  const jobRunTimes = jobsStatus
+  const jobRuns = jobsStatus
     ? [jobsStatus.shiftMonitor, jobsStatus.notificationWorker]
-        .map((job: AdminJobRunStatus) => job.lastRunAt ? new Date(job.lastRunAt).getTime() : 0)
-        .filter((timestamp) => timestamp > 0)
+        .filter((job: AdminJobRunStatus) => job.lastRunAt)
+        .sort((a, b) => new Date(b.lastRunAt!).getTime() - new Date(a.lastRunAt!).getTime())
     : [];
-  const lastJobRun = jobRunTimes.length ? Math.max(...jobRunTimes) : null;
+  const latestJob = jobRuns[0] ?? null;
+  const lastJobRun = latestJob?.lastRunAt ? new Date(latestJob.lastRunAt).getTime() : null;
   const minutesSinceJobRun = lastJobRun === null
     ? null
     : Math.max(0, Math.floor((jobClock - lastJobRun) / 60_000));
-  const jobRunStale = lastJobRun === null || jobClock - lastJobRun > 5 * 60_000;
+  const jobRunStale = Boolean(
+    jobsStatusError ||
+    !jobsStatus ||
+    !lastJobRun ||
+    latestJob?.error ||
+    jobClock - lastJobRun > 5 * 60_000
+  );
+  const jobStatusMessage = jobsStatusError
+    ? `Could not load background check status: ${jobsStatusError}`
+    : !jobsStatus
+      ? 'Background check status is unavailable.'
+      : latestJob?.error
+        ? `Last background check failed: ${latestJob.error}`
+        : !lastJobRun && jobsStatus.schedulerMode === 'external' && !jobsStatus.cronConfigured
+          ? 'Background checks are not configured. Set CRON_SECRET and schedule /api/cron/tick every minute.'
+          : !lastJobRun && jobsStatus.schedulerMode === 'external'
+            ? 'Waiting for the first cron run. Configure a scheduler to call /api/cron/tick every minute.'
+            : !lastJobRun && jobsStatus.schedulerMode === 'disabled'
+              ? 'Background checks are disabled. Enable in-process jobs or configure the external cron scheduler.'
+              : !lastJobRun
+                ? 'No background check has run yet. The first run should appear within a minute.'
+                : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -375,9 +408,7 @@ export function Component() {
             : 'border-line bg-white/70 text-muted'
         )}
       >
-        {minutesSinceJobRun === null
-          ? 'Last background check: unavailable'
-          : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`}
+        {jobStatusMessage}
       </div>
       <div className="glass-b flex flex-col gap-3 rounded-2xl p-4 md:flex-row md:items-center md:justify-between">
         <div role="tablist" aria-label="Notification view" className="glass-c flex w-fit gap-1 rounded-[10px] p-1">

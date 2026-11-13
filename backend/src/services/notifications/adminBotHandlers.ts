@@ -24,8 +24,13 @@ import { config } from '../../config';
 import { performForceCheckout } from '../forceCheckout';
 export { performForceCheckout } from '../forceCheckout';
 import { markFeePaid, updateStudentStatus } from '../adminActions';
-import { remindOvertimeStudent, snoozeOvertimeAlert } from './overtimeActions';
+import {
+  prepareOvertimeReminder,
+  sendOvertimeReminder,
+  snoozeOvertimeAlert,
+} from './overtimeActions';
 import { listFees, summarizeFees } from '../feeQueries';
+import { markSent as markReminderSent, ReminderChannel } from '../feeReminderService';
 import {
   beginFeeSearch,
   cancelFeeBotState,
@@ -724,10 +729,97 @@ export async function handleBotCallbackQuery(
     }
 
     if (action === 'ot_remind_student') {
-      const telegramLinked = await remindOvertimeStudent(id);
+      const prepared = await prepareOvertimeReminder(id);
+      const labels: Record<ReminderChannel, string> = {
+        whatsapp: '💬 WhatsApp',
+        sms: '📱 SMS',
+        telegram: '✈️ Telegram',
+      };
+      const keyboard: TelegramInlineButton[][] = prepared.channels.map((channel) => [{
+        text: `${channel === prepared.preferredChannel ? '★ ' : ''}${labels[channel]}`,
+        callback_data: callbackData(`ot_send_${channel}`, id),
+      }]);
+      keyboard.push([{ text: '↩ Cancel', callback_data: callbackData('ot_remind_cancel', id) }]);
+      await answerOnce('Choose a reminder channel.');
+      await edit(
+        chatId,
+        messageId,
+        `<b>Reminder · ${escapeHtml(prepared.studentName)}</b>\nPhone: ${escapeHtml(prepared.phone)}\n\n<pre>${escapeHtml(prepared.message)}</pre>` +
+          (prepared.lastReminder
+            ? `\n⚠️ Last reminder: ${prepared.lastReminder.sentAt.toLocaleString('en-IN')} · ${prepared.lastReminder.channel}.`
+            : ''),
+        keyboard
+      );
+      return;
+    }
+
+    if (action === 'ot_remind_cancel') {
+      await complete('Cancelled.', `${originalText}\n\nReminder cancelled.`);
+      return;
+    }
+
+    if (action.startsWith('ot_send_') || action.startsWith('ot_confirm_')) {
+      const confirmed = action.startsWith('ot_confirm_');
+      const channel = action.slice(confirmed ? 'ot_confirm_'.length : 'ot_send_'.length);
+      if (channel !== 'whatsapp' && channel !== 'sms' && channel !== 'telegram') {
+        await complete('Unknown reminder channel.', '⚠️ Unknown reminder channel.');
+        return;
+      }
+      const result = await sendOvertimeReminder({
+        sessionId: id,
+        channel,
+        adminId: admin._id,
+        confirmRecent: confirmed,
+      });
+      if (result.confirmationRequired) {
+        await answerOnce('Please confirm the recent reminder.');
+        await edit(
+          chatId,
+          messageId,
+          `${originalText}\n\n⚠️ A reminder was sent within the last 24 hours (${result.lastReminder?.sentAt.toLocaleString('en-IN')} · ${result.lastReminder?.channel}). Send another?`,
+          [[
+            { text: '✅ Send again', callback_data: callbackData(`ot_confirm_${channel}`, id) },
+            { text: '↩ Cancel', callback_data: callbackData('ot_remind_cancel', id) },
+          ]]
+        );
+        return;
+      }
+      if (result.telegramSent || result.telegramFailed) {
+        await complete(
+          result.telegramSent ? 'Telegram reminder sent.' : 'Telegram reminder failed.',
+          `${originalText}\n\n${result.telegramSent ? '✅ Sent to the student on Telegram.' : '⚠️ Telegram delivery failed. Check the student link and try again.'}`
+        );
+        return;
+      }
+      const buttons: TelegramInlineButton[][] = [];
+      if (result.url) {
+        buttons.push([{
+          text: channel === 'whatsapp' ? '💬 Open WhatsApp' : '📱 Open secure SMS page',
+          url: result.url,
+        }]);
+      }
+      if (result.notificationId) {
+        buttons.push([{
+          text: '✔ Mark sent',
+          callback_data: callbackData('ot_reminder_sent', result.notificationId),
+        }]);
+      }
+      buttons.push([{ text: '🏠 Menu', callback_data: callbackData('menu', '0') }]);
+      await answerOnce(channel === 'whatsapp' ? 'WhatsApp reminder ready.' : 'SMS reminder ready.');
+      await edit(
+        chatId,
+        messageId,
+        `${originalText}\n\nReminder ready. Open ${channel === 'whatsapp' ? 'WhatsApp' : 'the SMS page'}, send the message, then return here and mark it sent.`,
+        buttons
+      );
+      return;
+    }
+
+    if (action === 'ot_reminder_sent') {
+      const result = await markReminderSent(id, admin._id);
       await complete(
-        'Student reminded.',
-        `${originalText}\n\n📩 In-app reminder queued${telegramLinked ? ' with Telegram delivery' : ''}.`
+        result.alreadySent ? 'Already marked as sent.' : 'Reminder marked as sent.',
+        `${originalText}\n\n${result.alreadySent ? 'ℹ️ Reminder was already marked as sent.' : `✅ Marked sent by ${escapeHtml(admin.name)}.`}`
       );
       return;
     }
@@ -791,7 +883,9 @@ export async function handleBotCallbackQuery(
       typeof error === 'object' && error !== null && 'statusCode' in error
         ? Number(error.statusCode)
         : 500;
-    const message = errorStatus < 500 && error instanceof Error
+    const message = error instanceof Error && error.message.startsWith('SMS_ACTION_TOKEN_SECRET')
+      ? error.message
+      : errorStatus < 500 && error instanceof Error
       ? error.message
       : 'Action failed. Please try again.';
     await answerOnce(message.slice(0, 200));

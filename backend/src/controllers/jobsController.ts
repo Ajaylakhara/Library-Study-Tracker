@@ -1,6 +1,7 @@
 import { NextFunction, Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { JobRun } from '../models/JobRun';
+import { config } from '../config';
 
 export async function getJobsStatus(
   _req: AuthRequest,
@@ -25,6 +26,12 @@ export async function getJobsStatus(
     res.json({
       success: true,
       data: {
+        schedulerMode: process.env.VERCEL
+          ? 'external'
+          : config.runJobsInProcess
+            ? 'in-process'
+            : 'disabled',
+        cronConfigured: Boolean(process.env.CRON_SECRET?.trim()),
         shiftMonitor: format('shift-monitor'),
         notificationWorker: format('notification-worker'),
       },

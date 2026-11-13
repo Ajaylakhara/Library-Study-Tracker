@@ -215,6 +215,9 @@ documentation.
 - Fee reminders use the same backend service from the bot and `/admin/fees`.
   WhatsApp and SMS reminders are prepared for manual sending; linked students
   can also receive a reminder directly through Telegram.
+- The `/overtime` Remind student action now offers WhatsApp, SMS, and linked
+  Telegram. WhatsApp opens a prefilled `wa.me` chat; SMS opens the authenticated
+  reminder page so the administrator can open the SMS app, then mark it sent.
 - Eligible notification events are stored in MongoDB before delivery. The
   worker sends queued Telegram messages and records success or failure.
 - A linked student can receive the approval notification; shift and fee
@@ -354,3 +357,6 @@ tests at the only copy of production data.
   server, set it to `true` (the default) and run only one backend instance.
 - `OVERTIME_REPEAT_MINUTES=0` disables automatic repeat alerts; positive
   values set the repeat interval, with a maximum of six repeats per session.
+- The Alerts page reports “waiting for the first cron run” until the scheduler
+  successfully calls `/api/cron/tick`; it reports missing `CRON_SECRET` when the
+  serverless environment is not configured.

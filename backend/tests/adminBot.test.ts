@@ -53,6 +53,7 @@ import {
   normalizeReminderPhone,
   sendReminder,
 } from '../src/services/feeReminderService';
+import { sendOvertimeReminder } from '../src/services/notifications/overtimeActions';
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
@@ -445,6 +446,10 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(authorized.status).toBe(200);
       expect(authorized.body.data).toHaveProperty('shiftMonitor');
       expect(authorized.body.data).toHaveProperty('notificationWorker');
+      expect(['external', 'in-process', 'disabled']).toContain(
+        authorized.body.data.schedulerMode
+      );
+      expect(typeof authorized.body.data.cronConfigured).toBe('boolean');
     });
 
     it('shows the persistent admin menu only to linked admins', async () => {
@@ -1322,6 +1327,121 @@ describe('Admin Bot Authorization & Commands (DB)', () => {
       expect(updatedNotif?.actionStatus).toBe('contacted');
       expect(updatedNotif?.contactedBy?.toString()).toBe(testAdminUser._id.toString());
       expect(updatedNotif?.contactedAt).toBeInstanceOf(Date);
+    });
+
+    it('offers WhatsApp and SMS from the overtime reminder action and records manual sends', async () => {
+      const originalSecret = config.smsActionTokenSecret;
+      config.smsActionTokenSecret = 'test-secret-that-is-long-enough-for-hmac';
+      let editedText = '';
+      let editedKeyboard: any;
+      const answer = async () => ({ ok: true });
+      const edit = async (_chatId: string, _messageId: number, text: string, keyboard?: any) => {
+        editedText = text;
+        editedKeyboard = keyboard;
+        return { ok: true };
+      };
+
+      try {
+        await handleBotCallbackQuery(
+          {
+            id: 'overtime_reminder_options',
+            from: { id: linkedAdminChatId },
+            message: {
+              message_id: 205,
+              text: '⏰ Overtime alert',
+              chat: { id: linkedAdminChatId, type: 'private' },
+            },
+            data: `ot_remind_student:${callbackSession._id}`,
+          },
+          answer as any,
+          edit as any
+        );
+        expect(editedText).toContain('Reminder · Callback');
+        expect(editedText).toContain('<pre>');
+        expect(editedKeyboard.flat().map((button: any) => button.text)).toContain('💬 WhatsApp');
+        expect(editedKeyboard.flat().map((button: any) => button.text)).toContain('📱 SMS');
+        expect(editedText).not.toContain('In-app reminder queued');
+
+        await handleBotCallbackQuery(
+          {
+            id: 'overtime_reminder_whatsapp',
+            from: { id: linkedAdminChatId },
+            message: {
+              message_id: 205,
+              text: editedText,
+              chat: { id: linkedAdminChatId, type: 'private' },
+            },
+            data: `ot_send_whatsapp:${callbackSession._id}`,
+          },
+          answer as any,
+          edit as any
+        );
+        const whatsappButton = editedKeyboard.flat().find((button: any) => button.url);
+        const markButton = editedKeyboard.flat().find((button: any) => button.callback_data?.startsWith('ot_reminder_sent:'));
+        expect(whatsappButton.url).toContain(`https://wa.me/91${callbackStudent.phone}?text=`);
+        expect(markButton).toBeDefined();
+
+        const notification = await Notification.findOne({
+          sessionId: callbackSession._id,
+          user: callbackStudent._id,
+          type: 'shift_ended',
+          channel: 'whatsapp',
+        });
+        expect(notification?.status).toBe('manual_pending');
+        expect(notification?.message).toContain('Please check out now.');
+
+        await handleBotCallbackQuery(
+          {
+            id: 'overtime_reminder_mark_sent',
+            from: { id: linkedAdminChatId },
+            message: {
+              message_id: 205,
+              text: editedText,
+              chat: { id: linkedAdminChatId, type: 'private' },
+            },
+            data: markButton.callback_data,
+          },
+          answer as any,
+          edit as any
+        );
+        expect((await Notification.findById(notification?._id))?.status).toBe('sent');
+      } finally {
+        config.smsActionTokenSecret = originalSecret;
+        await Notification.deleteMany({
+          sessionId: callbackSession._id,
+          type: 'shift_ended',
+          channel: { $in: ['whatsapp', 'sms'] },
+        });
+      }
+    });
+
+    it('creates a secure SMS action for an overtime reminder', async () => {
+      const originalSecret = config.smsActionTokenSecret;
+      config.smsActionTokenSecret = 'test-secret-that-is-long-enough-for-hmac';
+      try {
+        const prepared = await sendOvertimeReminder({
+          sessionId: callbackSession._id.toString(),
+          channel: 'sms',
+          adminId: testAdminUser._id,
+          confirmRecent: true,
+        });
+        expect(prepared.url).toContain('/admin/send/');
+        const token = prepared.url!.split('/').pop()!;
+        const action = await getSmsAction(token);
+        expect(action.phone).toBe(`+91${callbackStudent.phone}`);
+        expect(action.message).toContain('Please check out now.');
+
+        const sent = await markSent(prepared.notificationId!, testAdminUser._id);
+        expect(sent.alreadySent).toBe(false);
+        expect((await Notification.findById(prepared.notificationId))?.status).toBe('sent');
+      } finally {
+        config.smsActionTokenSecret = originalSecret;
+        await Notification.deleteMany({
+          sessionId: callbackSession._id,
+          type: 'shift_ended',
+          channel: 'sms',
+        });
+      }
     });
 
     it('is idempotent on double "Mark as sent": answers "Already marked by X at HH:mm"', async () => {

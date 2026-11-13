@@ -16,7 +16,7 @@ interface SmsAction {
 }
 
 export function Component() {
-  useAdminHeader('Send SMS', 'Review and send the prepared fee reminder');
+  useAdminHeader('Send SMS', 'Review and send the prepared reminder');
   const { token = '' } = useParams();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
@@ -60,7 +60,7 @@ export function Component() {
     <section className="mx-auto w-full max-w-2xl">
       <div className="glass-b flex min-w-0 flex-col gap-5 rounded-2xl p-5 sm:p-7">
         <div>
-          <h2 className="m-0 font-serif text-2xl font-semibold text-oxford">Fee reminder by SMS</h2>
+          <h2 className="m-0 font-serif text-2xl font-semibold text-oxford">Reminder by SMS</h2>
           {action && <p className="mb-0 mt-2 text-sm text-muted">To {action.phone}</p>}
         </div>
         {error ? (
