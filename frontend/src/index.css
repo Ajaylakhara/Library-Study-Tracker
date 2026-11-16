@@ -171,7 +171,7 @@ html,body,#root{min-width:0;max-width:100%;overflow-x:clip}
 .mobile-data-actions button{width:100%;min-height:44px;white-space:normal}
 .modal-dialog{box-sizing:border-box}
 .modal-scroll-body{overscroll-behavior:contain}
-.modal-actions{position:sticky;bottom:0;padding-bottom:env(safe-area-inset-bottom);background:rgba(255,254,252,.97)}
+.modal-actions{position:sticky;bottom:0;padding-bottom:env(safe-area-inset-bottom);background:transparent}
 .admin-mobile-drawer{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
 .admin-mobile-drawer-panel{height:100%;animation:slide-in-left .22s ease-out}
 .admin-topbar{position:relative!important}
