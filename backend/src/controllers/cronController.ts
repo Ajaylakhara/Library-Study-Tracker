@@ -55,7 +55,13 @@ function cronSecretMatches(req: Request): boolean {
 }
 
 async function acquireLock(name: string): Promise<Date | null> {
-  await JobLock.init();
+  // Best effort only: on serverless the connection handle may not be ready for createCollection.
+  // MongoDB creates the collection on first write, and Mongoose builds the indexes itself.
+  try {
+    await JobLock.init();
+  } catch (error) {
+    logEvent('warn', 'job_lock_init_skipped', {}, error);
+  }
   const now = new Date();
   const lockedUntil = new Date(now.getTime() + LOCK_MS);
   const existing = await JobLock.findOneAndUpdate(
