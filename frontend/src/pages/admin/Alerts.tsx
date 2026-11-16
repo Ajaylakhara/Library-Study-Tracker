@@ -415,7 +415,7 @@ export function Component() {
         : !lastJobRun && jobsStatus.schedulerMode === 'external' && !jobsStatus.cronConfigured
           ? 'Automatic alerts are not set up yet. Please contact the system administrator.'
           : !lastJobRun && jobsStatus.schedulerMode === 'external'
-            ? 'Automatic alerts are set up and waiting for the first check. This usually takes about a minute.'
+            ? 'Automatic alerts have not started yet. The system is waiting for its scheduler to run the first check. If this stays for more than a few minutes, please contact the system administrator.'
             : !lastJobRun && jobsStatus.schedulerMode === 'disabled'
               ? 'Automatic alerts are turned off. Please contact the system administrator.'
               : !lastJobRun
