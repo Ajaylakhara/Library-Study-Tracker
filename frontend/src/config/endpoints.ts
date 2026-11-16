@@ -56,6 +56,7 @@ export const ENDPOINTS = {
     notifications: '/admin/notifications',
     jobsStatus: '/admin/jobs/status',
     failedNotifications: '/admin/notifications/failed',
+    retryFailedNotifications: '/admin/notifications/retry-failed',
     // Temporarily disabled with admin overtime follow-up alerts.
     // needsActionNotifications: '/admin/notifications/needs-action',
     unreadNotificationCount: '/admin/notifications/unread-count',

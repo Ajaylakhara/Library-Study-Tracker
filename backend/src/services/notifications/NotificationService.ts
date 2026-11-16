@@ -8,6 +8,7 @@ import {
 import { User, IUser } from '../../models/User';
 import { templates } from './templates';
 import { getLibraryNameOrDefault } from '../librarySettings';
+import { logEvent } from '../../utils/logger';
 
 export interface EnqueueOptions {
   userId: mongoose.Types.ObjectId | string;
@@ -20,6 +21,22 @@ export interface EnqueueOptions {
   message?: string;
   includeInApp?: boolean;
   forceTelegram?: boolean;
+  /**
+   * When true, a real database failure is thrown instead of only being logged, so the
+   * caller can avoid marking the event as handled. Duplicate-key (already queued) is never an error.
+   */
+  strict?: boolean;
+}
+
+export interface EnqueueSummary {
+  created: number;
+  duplicates: number;
+}
+
+export interface AdminEnqueueSummary extends EnqueueSummary {
+  admins: number;
+  adminsWithTelegram: number;
+  refreshed: number;
 }
 
 interface NotificationTarget {
@@ -28,7 +45,8 @@ interface NotificationTarget {
 }
 
 export class NotificationService {
-  static async enqueue(opts: EnqueueOptions): Promise<void> {
+  static async enqueue(opts: EnqueueOptions): Promise<EnqueueSummary> {
+    const summary: EnqueueSummary = { created: 0, duplicates: 0 };
     const {
       userId,
       type,
@@ -40,7 +58,7 @@ export class NotificationService {
     } = opts;
 
     const user = await User.findById(userId).select('+telegramChatId');
-    if (!user || (user as unknown as { isDeleted?: boolean }).isDeleted) return;
+    if (!user || (user as unknown as { isDeleted?: boolean }).isDeleted) return summary;
 
     const nameSnap =
       studentNameSnapshot ??
@@ -76,14 +94,26 @@ export class NotificationService {
           channel: target.channel,
           status: target.status,
         });
+        summary.created++;
       } catch (error: unknown) {
-        if ((error as { code?: number }).code !== 11000) {
-          console.error(
-            `[NotificationService] Failed to enqueue ${type}/${target.channel} (${error instanceof Error ? error.name : 'UnknownError'}).`
-          );
+        if ((error as { code?: number }).code === 11000) {
+          summary.duplicates++;
+          continue;
         }
+        logEvent(
+          'error',
+          'notification_enqueue_failed',
+          {
+            notificationType: type,
+            channel: target.channel,
+            sessionId: sessionId ? String(sessionId) : undefined,
+          },
+          error
+        );
+        if (opts.strict) throw error;
       }
     }
+    return summary;
   }
 
   static async enqueueAdmin(
@@ -92,7 +122,14 @@ export class NotificationService {
       studentPhone?: string;
       repeat?: boolean;
     }
-  ): Promise<void> {
+  ): Promise<AdminEnqueueSummary> {
+    const summary: AdminEnqueueSummary = {
+      created: 0,
+      duplicates: 0,
+      refreshed: 0,
+      admins: 0,
+      adminsWithTelegram: 0,
+    };
     const admins = await User.find({
       role: 'admin',
       status: 'approved',
@@ -104,12 +141,16 @@ export class NotificationService {
     const studentPhoneSnapshot =
       opts.studentPhone ?? (opts.vars?.studentPhone ? String(opts.vars.studentPhone) : null);
 
+    summary.admins = admins.length;
     for (const admin of admins) {
       const channels: NotificationChannel[] = ['inapp'];
-      if (admin.telegramChatId) channels.push('telegram');
+      if (admin.telegramChatId) {
+        channels.push('telegram');
+        summary.adminsWithTelegram++;
+      }
       for (const channel of channels) {
         const create = async () => {
-          await NotificationService.createOne({
+          const outcome = await NotificationService.createOne({
             userId: admin._id,
             type: opts.type,
             vars: opts.vars,
@@ -120,7 +161,10 @@ export class NotificationService {
             message: opts.message,
             channel,
             status: 'queued',
+            strict: opts.strict,
           });
+          if (outcome === 'created') summary.created++;
+          else if (outcome === 'duplicate') summary.duplicates++;
         };
         if (opts.repeat && opts.type === 'overtime_admin' && opts.sessionId) {
           const brandedVars = {
@@ -152,13 +196,15 @@ export class NotificationService {
             },
             { new: true }
           );
-          if (!refreshed) await create();
+          if (refreshed) summary.refreshed++;
+          else await create();
         } else {
           await create();
         }
       }
     }
 
+    return summary;
   }
 
   private static resolveTargets(
@@ -198,7 +244,7 @@ export class NotificationService {
       status: NotificationStatus;
       message?: string;
     }
-  ): Promise<void> {
+  ): Promise<'created' | 'duplicate' | 'failed'> {
     const {
       userId,
       type,
@@ -226,12 +272,21 @@ export class NotificationService {
         status,
         attempts: 0,
       });
+      return 'created';
     } catch (error: unknown) {
-      if ((error as { code?: number }).code !== 11000) {
-        console.error(
-          `[NotificationService] Failed to enqueue ${type}/${channel} (${error instanceof Error ? error.name : 'UnknownError'}).`
-        );
-      }
+      if ((error as { code?: number }).code === 11000) return 'duplicate';
+      logEvent(
+        'error',
+        'notification_enqueue_failed',
+        {
+          notificationType: type,
+          channel,
+          sessionId: sessionId ? String(sessionId) : undefined,
+        },
+        error
+      );
+      if (opts.strict) throw error;
+      return 'failed';
     }
   }
 }

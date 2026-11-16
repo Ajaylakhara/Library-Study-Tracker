@@ -8,10 +8,23 @@ import {
   buildOvertimeAlertText,
   buildOvertimeKeyboard,
 } from '../services/notifications/adminBotHandlers';
-import { format } from 'date-fns-tz';
-import { TZ } from '../utils/time';
+import { formatIST } from '../utils/time';
+import { logEvent } from '../utils/logger';
 
-const MAX_ATTEMPTS = 3;
+/** Quick attempts before a notification is shown as failed. */
+export const MAX_ATTEMPTS = 3;
+/** Hard cap including the later automatic retries of failed Telegram notifications. */
+export const MAX_TOTAL_ATTEMPTS = 8;
+/** Failed Telegram notifications are retried automatically for this long. */
+export const RETRY_WINDOW_MS = 24 * 60 * 60_000;
+/** Wait after attempt N (1-based) before attempt N+1. */
+const BACKOFF_MINUTES = [1, 2, 5, 10, 15, 30, 60];
+const SESSION_BOUND_TYPES = ['shift_reminder', 'shift_ended', 'overtime_admin'];
+
+export function backoffMs(attemptsMade: number): number {
+  const minutes = BACKOFF_MINUTES[Math.min(Math.max(attemptsMade, 1), BACKOFF_MINUTES.length) - 1];
+  return minutes * 60_000;
+}
 
 export interface ProcessQueuedNotificationOptions {
   notificationIds?: readonly string[];
@@ -34,15 +47,33 @@ export async function processQueuedNotifications(
   options: ProcessQueuedNotificationOptions = {}
 ): Promise<NotificationWorkerResult> {
   const startedAt = Date.now();
-  const query: Record<string, unknown> = {
-    status: 'queued',
-    attempts: { $lt: MAX_ATTEMPTS },
+  const nowDate = new Date();
+  const eligible = {
+    $or: [
+      // Normal queue.
+      { status: 'queued', attempts: { $lt: MAX_ATTEMPTS } },
+      // Telegram messages that failed in the last 24 hours are retried with backoff.
+      {
+        status: 'failed',
+        channel: 'telegram',
+        permanentFailure: { $ne: true },
+        attempts: { $lt: MAX_TOTAL_ATTEMPTS },
+        updatedAt: { $gte: new Date(nowDate.getTime() - RETRY_WINDOW_MS) },
+      },
+    ],
   };
+  const query: Record<string, unknown> = { $and: [eligible] };
   if (options.notificationIds !== undefined) {
+    // Explicit ids (tests, manual runs) bypass the backoff wait.
     query._id = { $in: options.notificationIds };
+  } else {
+    (query.$and as unknown[]).push({
+      $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: nowDate } }],
+    });
   }
 
   const pending = await Notification.find(query)
+    .sort({ createdAt: 1 })
     .limit(50)
     .populate({ path: 'user', select: 'phone name isDeleted +telegramChatId' });
 
@@ -70,7 +101,27 @@ export async function processQueuedNotifications(
         : (notif.vars as Record<string, string | number>);
     const baseMessage = notif.message || template.buildMessage(vars);
 
-    await Notification.findByIdAndUpdate(notif._id, { $inc: { attempts: 1 } });
+    // A failed notification being retried must still refer to a live session.
+    if (
+      notif.status === 'failed' &&
+      notif.sessionId &&
+      SESSION_BOUND_TYPES.includes(notif.type)
+    ) {
+      const live = await Session.exists({ _id: notif.sessionId, status: 'active' });
+      if (!live) {
+        await Notification.findByIdAndUpdate(notif._id, {
+          permanentFailure: true,
+          nextAttemptAt: null,
+          lastError: 'Not retried: the study session has already ended.',
+        });
+        continue;
+      }
+    }
+
+    await Notification.findByIdAndUpdate(notif._id, {
+      $inc: { attempts: 1 },
+      $set: { lastAttemptAt: new Date() },
+    });
 
     try {
       if (notif.channel === 'inapp') {
@@ -79,6 +130,7 @@ export async function processQueuedNotifications(
           sentAt: new Date(),
           message: baseMessage,
           lastError: notif.warning ? notif.lastError : null,
+          nextAttemptAt: null,
         });
         result.sent++;
         continue;
@@ -114,7 +166,7 @@ export async function processQueuedNotifications(
         const shiftHours = session?.shiftHours || (vars.shiftHours ? Number(vars.shiftHours) : 4);
         const shiftLabel = `${shiftHours}-hour`;
         const shiftEndsAtIST = session
-          ? format(session.shiftEndsAt, 'hh:mm a', { timeZone: TZ })
+          ? formatIST(session.shiftEndsAt, 'hh:mm a')
           : String(vars.shiftEndsAt || '');
         const minutesOver = session
           ? Math.max(0, Math.floor((Date.now() - session.shiftEndsAt.getTime()) / 60000))
@@ -153,6 +205,8 @@ export async function processQueuedNotifications(
         sentAt: new Date(),
         message: messageToSend,
         lastError: null,
+        nextAttemptAt: null,
+        permanentFailure: false,
       });
       result.sent++;
     } catch (err: unknown) {
@@ -167,35 +221,50 @@ export async function processQueuedNotifications(
         error.message.includes('403') ||
         error.message.includes('bot blocked by user');
 
+      const attempts = Math.max((notif.attempts ?? 0) + 1, isBlocked ? MAX_ATTEMPTS : 0);
+      const errorText = error.message || 'Unknown error';
+      const logFields = {
+        notificationId: String(notif._id),
+        notificationType: notif.type,
+        channel: notif.channel,
+        sessionId: notif.sessionId ? String(notif.sessionId) : undefined,
+        attempts,
+      };
+
       if (isBlocked) {
+        // Telegram refused for good (bot blocked): do not keep retrying automatically.
         await Notification.findByIdAndUpdate(notif._id, {
           status: 'failed',
-          attempts: MAX_ATTEMPTS,
-          lastError: error.message,
+          attempts,
+          lastError: errorText,
+          permanentFailure: true,
+          nextAttemptAt: null,
         });
+        logEvent('error', 'notification_delivery_failed', { ...logFields, permanent: true }, error);
         continue;
       }
 
-      // Requirement 9: Respect retry_after on 429
-      if (errorCode === 429 && retryAfter) {
-        await new Promise((res) => setTimeout(res, Math.min(retryAfter, 5) * 1000));
-      }
-
-      const attempts = (notif.attempts ?? 0) + 1;
-      const isFinal = attempts >= MAX_ATTEMPTS;
-
+      const exhausted = attempts >= MAX_TOTAL_ATTEMPTS;
+      // Respect Telegram's retry_after (429) without blocking the cron tick.
+      const waitMs = Math.max(backoffMs(attempts), errorCode === 429 && retryAfter ? retryAfter * 1000 : 0);
       await Notification.findByIdAndUpdate(notif._id, {
-        status: isFinal ? 'failed' : 'queued',
-        lastError: error.message ?? 'Unknown error',
+        status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
+        lastError: errorText,
+        nextAttemptAt: exhausted ? null : new Date(Date.now() + waitMs),
       });
-
-      if (isFinal) {
-        console.error(`[NotificationWorker] A ${notif.type} notification permanently failed after ${MAX_ATTEMPTS} attempts.`);
-      }
+      logEvent(
+        'error',
+        'notification_delivery_failed',
+        { ...logFields, willRetry: !exhausted, retryInMs: exhausted ? null : waitMs },
+        error
+      );
     }
   }
-  console.info(
-    `[NotificationWorker] Run complete: processed=${result.processed}, sent=${result.sent}, errors=${result.errors}.`
-  );
+  logEvent('info', 'notification_worker_run_complete', {
+    processed: result.processed,
+    sent: result.sent,
+    errors: result.errors,
+    durationMs: Date.now() - startedAt,
+  });
   return result;
 }

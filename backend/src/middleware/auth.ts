@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { config } from '../config';
+import { setSessionCookie, shouldRenewToken, signSessionToken } from '../services/authTokens';
 import { User, IUser } from '../models/User';
 import { createError } from './errorHandler';
 
@@ -76,6 +77,11 @@ export const authenticate = async (
 
     if (user.status === 'blocked' || user.status === 'rejected') {
       throw createError('Your account has been blocked. Please contact admin.', 403);
+    }
+
+    // Sliding session: while the app is in use, swap a token that is past half-life for a fresh one.
+    if (shouldRenewToken(decoded.exp)) {
+      setSessionCookie(res, signSessionToken(user._id.toString(), user.role, user.tokenVersion ?? 0));
     }
 
     req.user = user;

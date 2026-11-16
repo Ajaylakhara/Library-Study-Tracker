@@ -131,6 +131,9 @@ export interface AppNotification {
   status: 'queued' | 'sent' | 'failed' | 'manual_pending';
   attempts: number;
   lastError: string | null;
+  lastAttemptAt?: string | null;
+  nextAttemptAt?: string | null;
+  permanentFailure?: boolean;
   warning?: string | null;
   read?: boolean;
   readAt?: string | null;
@@ -148,11 +151,26 @@ export interface AdminJobRunStatus {
   error: string | null;
 }
 
+export interface AdminCronResult {
+  monitorRan?: boolean;
+  notificationsQueued?: number;
+  sent?: number;
+  failed?: number;
+  durationMs?: number;
+  timedOut?: boolean;
+}
+
 export interface AdminJobsStatus {
   schedulerMode: 'external' | 'in-process' | 'disabled';
   cronConfigured: boolean;
   shiftMonitor: AdminJobRunStatus;
   notificationWorker: AdminJobRunStatus;
+  lastCronRunAt?: string | null;
+  lastCronResult?: AdminCronResult | null;
+  lastCronError?: string | null;
+  failedNotificationCount?: number;
+  retryableFailedCount?: number;
+  adminTelegramLinked?: boolean;
 }
 
 /*

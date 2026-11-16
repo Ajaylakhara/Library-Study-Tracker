@@ -1,10 +1,10 @@
+import { snoozeUntil } from '../../utils/shiftTiming';
 import mongoose from 'mongoose';
-import { format } from 'date-fns-tz';
 import { Notification } from '../../models/Notification';
 import { Session } from '../../models/Session';
 import { createError } from '../../middleware/errorHandler';
 import { getLibraryNameOrDefault } from '../librarySettings';
-import { TZ } from '../../utils/time';
+import { formatIST } from '../../utils/time';
 import {
   createSmsActionUrl,
   normalizeReminderPhone,
@@ -65,7 +65,7 @@ async function findOvertimeReminderTarget(
   const preferredChannel = channels.includes(session.student.preferredChannel)
     ? session.student.preferredChannel
     : 'whatsapp';
-  const shiftEndsAt = format(session.shiftEndsAt, 'hh:mm a', { timeZone: TZ });
+  const shiftEndsAt = formatIST(session.shiftEndsAt, 'hh:mm a');
   const message =
     `Hi ${session.student.name}, your ${session.shiftHours}-hour shift at ${libraryName} ` +
     `ended at ${shiftEndsAt}. Please check out now.`;
@@ -127,7 +127,7 @@ export async function sendOvertimeReminder(input: {
 
   const vars = {
     name: target.studentName,
-    shiftEndsAt: format(target.shiftEndsAt, 'hh:mm a', { timeZone: TZ }),
+    shiftEndsAt: formatIST(target.shiftEndsAt, 'hh:mm a'),
     libraryName: await getLibraryNameOrDefault(),
   };
   if (input.channel === 'telegram') {
@@ -222,7 +222,7 @@ export async function snoozeOvertimeAlert(
     { _id: sessionId, status: 'active' },
     {
       $set: {
-        overtimeSnoozedUntil: new Date(now.getTime() + 15 * 60_000),
+        overtimeSnoozedUntil: snoozeUntil(now),
         overtimeSnoozeAlertPending: true,
       },
     },

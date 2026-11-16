@@ -49,7 +49,7 @@ import {
   markNotificationRead,
   // markNotificationContacted,
 } from '../controllers/adminController';
-import { getJobsStatus } from '../controllers/jobsController';
+import { getJobsStatus, retryFailedNotifications } from '../controllers/jobsController';
 
 const router = Router();
 const accountChangeLimiter = rateLimit({
@@ -84,6 +84,7 @@ router.patch('/account/profile', asyncHandler(updateAdminDisplayName));
 router.get('/settings', asyncHandler(getAdminSettings));
 router.put('/settings', settingsUpdateLimiter, asyncHandler(putAdminSettings));
 router.get('/jobs/status', asyncHandler(getJobsStatus));
+router.post('/notifications/retry-failed', feeReminderLimiter, asyncHandler(retryFailedNotifications));
 router.get('/notifications/sms-action/:token', feeReminderLimiter, asyncHandler(getSmsReminderAction));
 router.post('/notifications/:id/mark-sent', feeReminderLimiter, asyncHandler(markFeeReminderSent));
 

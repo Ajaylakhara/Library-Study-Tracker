@@ -15,7 +15,6 @@
  */
 
 import mongoose from 'mongoose';
-import { format } from 'date-fns-tz';
 import { User, IUser } from '../../models/User';
 import { TOTAL_SEATS } from '../../models/Seat';
 import { Session } from '../../models/Session';
@@ -44,7 +43,7 @@ import {
   showFeeSearchPrompt,
   showFeeStudent,
 } from './feeBotHandlers';
-import { diffMinutes, formatDuration, previousMonthString, toMonthString, TZ } from '../../utils/time';
+import { diffMinutes, formatDuration, formatIST, previousMonthString, toMonthString } from '../../utils/time';
 import {
   sendMessageHtml,
   sendReplyKeyboard,
@@ -317,7 +316,7 @@ export async function handleOvertime(
     const studentName = escapeHtml(s.student?.name || 'Unknown');
     const seatNumber = s.seat?.number ?? '?';
     const minutesOver = Math.floor((now.getTime() - s.shiftEndsAt.getTime()) / 60000);
-    const shiftEndsAtIST = format(s.shiftEndsAt, 'hh:mm a', { timeZone: TZ });
+    const shiftEndsAtIST = formatIST(s.shiftEndsAt, 'hh:mm a');
 
     text += `• <b>${studentName}</b> · Seat ${seatNumber}\n`;
     text += `  ${s.shiftHours}h shift · ended ${shiftEndsAtIST} · ⚠️ <b>${minutesOver}m over</b>\n`;
@@ -424,7 +423,7 @@ export async function recordManualNotificationSent(opts: {
       'name'
     );
     const adminName = populated?.contactedBy?.name || 'another admin';
-    const timeStr = format(populated?.sentAt || populated?.contactedAt || now, 'hh:mm a', { timeZone: TZ });
+    const timeStr = formatIST(populated?.sentAt || populated?.contactedAt || now, 'hh:mm a');
     return {
       success: false,
       alreadyMarked: true,
@@ -460,7 +459,7 @@ export async function recordManualNotificationSent(opts: {
       'name'
     );
     const adminName = populated?.contactedBy?.name || 'another admin';
-    const timeStr = format(populated?.sentAt || populated?.contactedAt || now, 'hh:mm a', { timeZone: TZ });
+    const timeStr = formatIST(populated?.sentAt || populated?.contactedAt || now, 'hh:mm a');
     return {
       success: false,
       alreadyMarked: true,
@@ -470,7 +469,7 @@ export async function recordManualNotificationSent(opts: {
     };
   }
 
-  const timeStr = format(now, 'hh:mm a', { timeZone: TZ });
+  const timeStr = formatIST(now, 'hh:mm a');
   return {
     success: true,
     markedBy: admin.name,
@@ -746,7 +745,7 @@ export async function handleBotCallbackQuery(
         messageId,
         `<b>Reminder · ${escapeHtml(prepared.studentName)}</b>\nPhone: ${escapeHtml(prepared.phone)}\n\n<pre>${escapeHtml(prepared.message)}</pre>` +
           (prepared.lastReminder
-            ? `\n⚠️ Last reminder: ${prepared.lastReminder.sentAt.toLocaleString('en-IN')} · ${prepared.lastReminder.channel}.`
+            ? `\n⚠️ Last reminder: ${prepared.lastReminder.sentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} · ${prepared.lastReminder.channel}.`
             : ''),
         keyboard
       );
@@ -776,7 +775,7 @@ export async function handleBotCallbackQuery(
         await edit(
           chatId,
           messageId,
-          `${originalText}\n\n⚠️ A reminder was sent within the last 24 hours (${result.lastReminder?.sentAt.toLocaleString('en-IN')} · ${result.lastReminder?.channel}). Send another?`,
+          `${originalText}\n\n⚠️ A reminder was sent within the last 24 hours (${result.lastReminder?.sentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} · ${result.lastReminder?.channel}). Send another?`,
           [[
             { text: '✅ Send again', callback_data: callbackData(`ot_confirm_${channel}`, id) },
             { text: '↩ Cancel', callback_data: callbackData('ot_remind_cancel', id) },
@@ -864,7 +863,7 @@ export async function handleBotCallbackQuery(
         await complete('Session not found.', `${originalText}\n\n⚠️ Session not found.`);
         return;
       }
-      const timeStr = format(new Date(), 'hh:mm a', { timeZone: TZ });
+      const timeStr = formatIST(new Date(), 'hh:mm a');
       await complete(
         'Force checkout completed.',
         `${originalText}\n\n🚪 Checked out by ${escapeHtml(admin.name)}, ${timeStr} (${result.durationFormatted})`

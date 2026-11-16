@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BellOff, Check, CheckCheck, MessageCircle } from 'lucide-react';
+import { BellOff, Check, CheckCheck, MessageCircle, RotateCw } from 'lucide-react';
 import { del, get, patch, post } from '../../store/api';
 import { ENDPOINTS } from '../../config/endpoints';
 import { useAdminHeader, useRefreshBadges } from '../../layout/AdminLayout';
@@ -199,12 +199,15 @@ export function Component() {
   const [page, setPage] = useState(1);
   const [markingAll, setMarkingAll] = useState(false);
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [jobsStatus, setJobsStatus] = useState<AdminJobsStatus | null>(null);
   const [jobsStatusError, setJobsStatusError] = useState<string | null>(null);
   const [jobClock, setJobClock] = useState(Date.now());
   const refreshBadges = useRefreshBadges();
 
   useEffect(() => setPage(1), [tab]);
+
+  const loadStatusRef = useRef<() => void>(() => undefined);
 
   useEffect(() => {
     let active = true;
@@ -223,6 +226,7 @@ export function Component() {
           }
         });
     };
+    loadStatusRef.current = loadStatus;
     loadStatus();
     const refresh = setInterval(loadStatus, 60_000);
     const clock = setInterval(() => setJobClock(Date.now()), 60_000);
@@ -261,6 +265,20 @@ export function Component() {
       dispatch(showToast('error', errMsg(e)));
     } finally {
       setMarkingAll(false);
+    }
+  };
+
+  const handleRetryFailed = async () => {
+    setRetrying(true);
+    try {
+      const r = await post<{ requeued: number }>(ENDPOINTS.admin.retryFailedNotifications);
+      dispatch(showToast('success', r.message ?? 'Failed notifications queued for retry.'));
+      await reload();
+      loadStatusRef.current();
+    } catch (e) {
+      dispatch(showToast('error', errMsg(e)));
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -335,7 +353,7 @@ export function Component() {
           <span className="text-muted">—</span>
         ),
     },
-    { key: 'attempts', header: 'Attempts', align: 'right', render: (n) => <span className="tnum">{n.attempts} / 3</span> },
+    { key: 'attempts', header: 'Attempts', align: 'right', render: (n) => <span className="tnum">{n.attempts}</span> },
     { key: 'when', header: 'Last tried', render: (n) => <span className="tnum text-muted">{dateTimeLabel(n.updatedAt)}</span> },
     {
       key: 'actions',
@@ -369,7 +387,9 @@ export function Component() {
         .sort((a, b) => new Date(b.lastRunAt!).getTime() - new Date(a.lastRunAt!).getTime())
     : [];
   const latestJob = jobRuns[0] ?? null;
-  const lastJobRun = latestJob?.lastRunAt ? new Date(latestJob.lastRunAt).getTime() : null;
+  // The combined /api/cron/tick record is the most reliable signal; fall back to the single jobs.
+  const lastJobRunSource = jobsStatus?.lastCronRunAt ?? latestJob?.lastRunAt ?? null;
+  const lastJobRun = lastJobRunSource ? new Date(lastJobRunSource).getTime() : null;
   const minutesSinceJobRun = lastJobRun === null
     ? null
     : Math.max(0, Math.floor((jobClock - lastJobRun) / 60_000));
@@ -378,12 +398,18 @@ export function Component() {
     !jobsStatus ||
     !lastJobRun ||
     latestJob?.error ||
-    jobClock - lastJobRun > 5 * 60_000
+    jobsStatus.lastCronError ||
+    jobClock - lastJobRun > 3 * 60_000
   );
+  const failedCount = jobsStatus?.failedNotificationCount ?? 0;
+  const retryableCount = jobsStatus?.retryableFailedCount ?? 0;
+  const lastCronResult = jobsStatus?.lastCronResult ?? null;
   const jobStatusMessage = jobsStatusError
     ? `Could not load background check status: ${jobsStatusError}`
     : !jobsStatus
       ? 'Background check status is unavailable.'
+      : jobsStatus.lastCronError
+        ? `Last cron run failed: ${jobsStatus.lastCronError}`
       : latestJob?.error
         ? `Last background check failed: ${latestJob.error}`
         : !lastJobRun && jobsStatus.schedulerMode === 'external' && !jobsStatus.cronConfigured
@@ -394,7 +420,9 @@ export function Component() {
               ? 'Background checks are disabled. Enable in-process jobs or configure the external cron scheduler.'
               : !lastJobRun
                 ? 'No background check has run yet. The first run should appear within a minute.'
-                : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`;
+                : jobRunStale
+                  ? `Warning: no cron run in the last ${minutesSinceJobRun} minutes. Alerts are not being checked or delivered. Check the scheduler.`
+                  : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -410,6 +438,46 @@ export function Component() {
       >
         {jobStatusMessage}
       </div>
+      {jobsStatus && (
+        <div className="glass-b grid gap-3 rounded-2xl p-4 text-sm sm:grid-cols-2 lg:grid-cols-4" aria-label="Delivery health">
+          <div>
+            <p className="text-xs text-muted">Last cron run</p>
+            <p className="font-semibold text-ink">
+              {jobsStatus.lastCronRunAt ? dateTimeLabel(jobsStatus.lastCronRunAt) : 'Not yet'}
+            </p>
+            {lastCronResult && (
+              <p className="text-xs text-muted">
+                queued {lastCronResult.notificationsQueued ?? 0} · sent {lastCronResult.sent ?? 0} · failed{' '}
+                {lastCronResult.failed ?? 0}
+                {lastCronResult.durationMs !== undefined ? ` · ${lastCronResult.durationMs} ms` : ''}
+              </p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-muted">Failed notifications</p>
+            <p className={cn('font-semibold', failedCount > 0 ? 'text-occupied-fg' : 'text-ink')}>{failedCount}</p>
+            {retryableCount > 0 && <p className="text-xs text-muted">{retryableCount} retryable (last 24 h)</p>}
+          </div>
+          <div>
+            <p className="text-xs text-muted">Admin Telegram</p>
+            <p className={cn('font-semibold', jobsStatus.adminTelegramLinked ? 'text-ink' : 'text-occupied-fg')}>
+              {jobsStatus.adminTelegramLinked ? 'Linked' : 'Not linked: overtime alerts will not reach Telegram'}
+            </p>
+          </div>
+          <div className="flex items-center sm:justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              loading={retrying}
+              disabled={retryableCount === 0}
+              icon={<RotateCw size={16} />}
+              onClick={() => void handleRetryFailed()}
+            >
+              Retry failed
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="glass-b flex flex-col gap-3 rounded-2xl p-4 md:flex-row md:items-center md:justify-between">
         <div role="tablist" aria-label="Notification view" className="glass-c flex w-fit gap-1 rounded-[10px] p-1">
           {(['failed', 'all'] as Tab[]).map((t) => {
@@ -439,7 +507,7 @@ export function Component() {
         <div className="flex items-center justify-between gap-3 pb-2">
           <p className="text-sm text-muted">
             {tab === 'failed'
-              ? 'Alerts needing admin attention. Messages retried 3 times appear under Failed.'
+              ? 'Alerts needing admin attention. Failed Telegram messages are retried automatically for 24 hours.'
               : 'All dispatched notifications.'}
           </p>
           {hasUnread && (

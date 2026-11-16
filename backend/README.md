@@ -119,7 +119,7 @@ npm start
 |---|---|---|
 | `PORT` | `5000` | Server port |
 | `MONGODB_URI` | `mongodb://localhost/library_study_tracker` | MongoDB connection URI |
-| `JWT_SECRET` | *(required in prod)* | Secret key for JWT signing |
+| `JWT_SECRET` | *(required)* | Secret key for JWT signing; at least 32 characters in production, and the server refuses to start without it |
 | `CLIENT_URL` | `http://localhost:3000` | CORS allowed origin |
 | `ADMIN_PHONE` | `9000000000` | Admin phone for seed (also accepts `SEED_ADMIN_PHONE`) |
 | `ADMIN_PIN` | *(set locally)* | Six-digit admin PIN; the seed stores only its bcrypt hash |

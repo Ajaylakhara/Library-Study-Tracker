@@ -3,6 +3,7 @@ import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../hooks/useRedux';
 import { fetchMe } from '../toolkit/authThunks';
 import { PageLoader } from './Spinner';
+import { ConnectionProblem } from './ConnectionProblem';
 import type { Role } from '../types';
 
 export const homeFor = (role: Role) => (role === 'admin' ? '/admin' : '/home');
@@ -11,9 +12,11 @@ export const homeFor = (role: Role) => (role === 'admin' ? '/admin' : '/home');
 export function useBootstrap() {
   const dispatch = useAppDispatch();
   const bootstrapped = useAppSelector((s) => s.auth.bootstrapped);
+  const connectionError = useAppSelector((s) => s.auth.connectionError);
   useEffect(() => {
-    if (!bootstrapped) dispatch(fetchMe());
-  }, [bootstrapped, dispatch]);
+    // After a connection failure wait for the user's "Try again" instead of looping.
+    if (!bootstrapped && !connectionError) dispatch(fetchMe());
+  }, [bootstrapped, connectionError, dispatch]);
 
   // Handle browser back-forward cache (bfcache) restore
   useEffect(() => {
@@ -33,6 +36,8 @@ export function ProtectedRoute({ role }: { role: Role }) {
   const ready = useBootstrap();
   const user = useAppSelector((s) => s.auth.user);
   const loc = useLocation();
+  const connectionError = useAppSelector((s) => s.auth.connectionError);
+  if (!ready && connectionError) return <ConnectionProblem />;
   if (!ready) return <PageLoader label="Loading your account" />;
   if (!user) {
     return <Navigate to="/login" replace state={{ from: loc.pathname }} />;

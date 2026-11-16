@@ -31,7 +31,7 @@ Set `NODE_ENV=production` on the server so cookies are `Secure`, and serve over 
 
 > [!IMPORTANT]
 > **Production API URL Configuration:**
-> Before deploying, open `.env.production` and replace `VITE_API_URL` with your actual production API URL (e.g., `https://api.yourdomain.com/api` or `/api` if using reverse proxy on the same origin). Do NOT commit production secrets.
+> Production builds always call the relative `/api` path (`VITE_API_URL` is ignored), so the login cookie stays first-party. On Vercel, `vercel.json` rewrites `/api/*` to the backend: set its `destination` to your backend URL. See `docs/DEPLOY_CHECKLIST.md`. Do NOT commit production secrets.
 
 ## Structure
 

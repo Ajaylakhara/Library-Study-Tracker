@@ -23,7 +23,7 @@ checklist, see [MASTER_PLAN.md](./MASTER_PLAN.md).
 | Frontend | React, TypeScript, Vite, Redux Toolkit, React Router, Tailwind CSS v4 |
 | Backend | Node.js, TypeScript, Express, Mongoose |
 | Database | MongoDB |
-| Authentication | Shared phone/PIN login; JWT in an HTTP-only cookie |
+| Authentication | Shared phone/PIN login; 30-day JWT in an HTTP-only cookie that renews while the app is in use; lockout after repeated wrong PINs |
 | Library capacity | 70 numbered seats |
 | Time zone | Asia/Kolkata (IST) for scheduled billing and date boundaries |
 | Notifications | In-app, Telegram, and admin-assisted WhatsApp/SMS for supported notification types |
@@ -58,11 +58,55 @@ LMS(Library Management System)/
 │       ├── toolkit/               # Redux slices and async thunks
 │       └── types/                  # Shared frontend data types
 ├── docs/
+│   ├── DEPLOY_CHECKLIST.md        # Manual steps for production deploys (env vars, cron, webhook)
 │   └── notification-plan.md       # Notification design notes; not all planned features are implemented
 ├── MASTER_PLAN.md
 ├── PROJECT_OVERVIEW.md
 └── PROJECT_WORKFLOWS.md
 ```
+
+## How the frontend reaches the backend (proxy / rewrite)
+
+The frontend and backend are separate Vercel projects on different domains, but
+the browser only ever talks to the **frontend's own origin**:
+
+- `frontend/vercel.json` rewrites `/api/:path*` to the backend deployment and
+  serves `index.html` for every other path (single-page app routing).
+- Production builds always call the relative path `/api` (the value of
+  `VITE_API_URL` is ignored in production). Because the request is same-origin
+  from the browser's point of view, the login cookie is first-party and is not
+  blocked as a third-party cookie.
+- In local development the Vite dev server proxies `/api` to
+  `http://localhost:5000`, so nothing else needs configuring.
+- If the backend URL changes, edit the rewrite `destination` in
+  `frontend/vercel.json` and redeploy the frontend.
+
+## Sign-in, sessions and lockout
+
+- **Cookie:** `token`, httpOnly, `secure` in production, `sameSite=lax`, path
+  `/`, lifetime 30 days. The token itself is a 30-day JWT for both students and
+  admins.
+- **Sliding session:** on any authenticated request, a token with fewer than 15
+  days left is replaced by a fresh 30-day token. The account, role and status
+  are re-checked on every request, so a blocked, rejected or deleted account
+  loses access immediately even though its token has not expired.
+- **`JWT_SECRET` is required.** There is no fallback value. In production the
+  server refuses to start if it is missing, shorter than 32 characters, or a
+  published placeholder.
+- **Lockout:** 5 wrong PINs for a phone number lock sign-in for that number for
+  15 minutes, and 30 failures from one address lock that address. Unknown phone
+  numbers are counted too, and every lockout returns the same message, so
+  responses never reveal whether a phone number exists. Admins use the same form
+  and are covered by the same rules. Counters are stored in MongoDB
+  (`LoginThrottle`), so they work across serverless instances.
+- **Frontend:** the user is logged out only when the server answers 401 (or 403
+  for a blocked account). A network error, timeout (for example a cold start)
+  or 5xx on the account check is retried once and then shows a "Try again"
+  screen; the session is kept.
+- **Admin inactivity timeout:** after 30 minutes without activity the admin sees
+  a 60-second warning and is then signed out. Controlled by
+  `ADMIN_INACTIVITY_TIMEOUT_MINUTES` in `frontend/src/config/constants.ts`
+  (`0` turns it off).
 
 ## User-facing application
 
@@ -103,7 +147,7 @@ frees the seat; the student's seat assignment remains saved for a later visit.
 | Sessions | `/admin/sessions` | Review sessions and force-checkout active sessions |
 | Fees | `/admin/fees` | Review fees, mark payment, generate fee records, and prepare individual WhatsApp/SMS/Telegram reminders |
 | Reports | `/admin/reports` | View reports and export attendance |
-| Alerts | `/admin/alerts` | Review notifications, delivery status, and supported manual follow-ups |
+| Alerts | `/admin/alerts` | Review notifications, delivery status, and supported manual follow-ups; see "Alerts dashboard" below |
 
 Administrators can create approved students, assign seats and shifts, and
 provide a generated or supplied PIN to the student. A PIN returned during
@@ -153,12 +197,20 @@ in-process scheduling is disabled; configure a minute-level external scheduler
 to call the authenticated cron endpoint described under Deployment notes.
 
 - **Shift monitor:** catches up on missed runs; enqueues a reminder only while
-  the shift is ending soon, a shift-ended notification after end, and an admin
-  overtime alert after 15 minutes. Overtime alerts can be snoozed for 15 minutes
-  and optionally repeated (up to six times).
-- **Notification worker:** every 30 seconds; sends queued Telegram messages,
-  marks in-app notifications delivered, and attempts failed Telegram sends up
-  to three times.
+  the shift is ending soon (last 10 minutes), a shift-ended notification after
+  end, and an admin overtime alert after 15 minutes. Overtime alerts can be
+  snoozed for 15 minutes and optionally repeated (up to six times). It creates
+  the notification records **first** and marks the session's "alert sent" flag
+  only afterwards, so a database failure leaves the alert to be retried on the
+  next tick instead of silently losing it. The unique notification index makes
+  repeating that step harmless. The rules live in `utils/shiftTiming.ts`.
+- **Notification worker:** sends queued Telegram messages, marks in-app
+  notifications delivered, and records `attempts`, `lastAttemptAt`,
+  `nextAttemptAt` and `lastError` on every notification. See "Delivery retries".
+- **Time zone:** session times are stored as UTC instants and compared as
+  instants. Anything shown to people (for example "shift ends at 11:00 AM") must
+  go through `formatIST()` in `utils/time.ts`; `date-fns-tz`'s `format()` alone
+  prints the server's time zone, which is UTC on Vercel.
 - **Monthly fees:** at 00:01 IST on the first day of each month; generates
   unpaid fee records for the previous month for approved students with a
   positive monthly fee.
@@ -166,6 +218,39 @@ to call the authenticated cron endpoint described under Deployment notes.
 An overtime session does **not** automatically end. The student or an
 administrator must check it out. Admin force-checkout records the completed
 session and frees the seat.
+
+### Delivery retries
+
+- A Telegram notification gets 3 quick attempts. After that it is shown as
+  `failed`, but it is **still retried automatically for 24 hours** with growing
+  waits (1, 2, 5, 10, 15, 30, then 60 minutes) up to 8 attempts in total. A
+  Telegram "retry after" answer is respected without blocking the cron run.
+- A "bot blocked by user" (403) answer is permanent: no automatic retry
+  (`permanentFailure`).
+- A failed shift-reminder, shift-ended or overtime message is **not** retried
+  once its study session has ended.
+- On `/admin/alerts`, **Retry failed** puts every failed Telegram notification
+  from the last 24 hours back in the queue (admin only,
+  `POST /api/admin/notifications/retry-failed`). The next cron tick delivers
+  them.
+- If no admin has Telegram linked when an overtime alert is created, the in-app
+  alert carries the warning "Telegram alert NOT sent: no admin has Telegram
+  linked", and a warning is logged, instead of failing silently.
+- Errors are logged as one-line JSON (`type`, `sessionId`, `notificationId`,
+  the Telegram error text). The bot token is redacted from all log output.
+
+### Alerts dashboard (`/admin/alerts`)
+
+| Field | Meaning |
+|---|---|
+| Banner | Last background check time; turns red with a warning if there was **no cron run in the last 3 minutes**, or the last run failed, or `CRON_SECRET` is missing |
+| Last cron run | Time of the last `/api/cron/tick`, with its result: notifications queued, sent, failed, and how long it took |
+| Failed notifications | Count of notifications in the `failed` state, and how many are still retryable (last 24 hours) |
+| Admin Telegram | Whether any active admin has Telegram linked; "Not linked" means overtime alerts cannot reach Telegram |
+| Retry failed | Re-queues the retryable failed Telegram notifications |
+
+The numbers come from `GET /api/admin/jobs/status`. The last tick is stored in
+MongoDB (`JobRun` record named `tick`: `completedAt`, `error`, `result`).
 
 ## Telegram bot workflow
 
@@ -276,8 +361,9 @@ bot commands.
 2. The selected delivery path determines whether a notification is queued for
    Telegram, recorded in-app, or made available for a supported manual
    WhatsApp/SMS follow-up.
-3. The worker updates queued delivery status and retries Telegram failures.
-   Administrators can review notification status in `/admin/alerts`.
+3. The worker updates queued delivery status and retries Telegram failures
+   (see "Delivery retries"). Administrators can review notification status in
+   `/admin/alerts`.
 
 ## Local development
 
@@ -334,25 +420,28 @@ tests at the only copy of production data.
 
 ## Deployment notes
 
-- Serve the frontend build over HTTPS and proxy `/api` to the backend.
-- Configure the production frontend origin, MongoDB URI, and a strong unique
-  JWT secret in the backend environment.
-- Set production cookie/proxy settings correctly and keep credentials out of
-  source control.
+The step-by-step production checklist (including the manual steps) is in
+[docs/DEPLOY_CHECKLIST.md](./docs/DEPLOY_CHECKLIST.md). Every environment
+variable is listed with placeholders in `backend/.env.example` and
+`frontend/.env.example`.
+
+- Serve the frontend build over HTTPS. `frontend/vercel.json` proxies `/api` to
+  the backend (see "How the frontend reaches the backend").
+- Configure the MongoDB URI and a strong unique `JWT_SECRET` (32+ characters)
+  in the backend environment. The backend will not start in production without
+  it. Keep credentials out of source control.
 - Configure Telegram's webhook only when a public HTTPS endpoint is available.
 - For serverless scheduling, set a strong random `CRON_SECRET` in the backend
   environment. Call `POST https://<backend-host>/api/cron/tick` once per minute
-  using a Bearer authorization value containing that secret, or the
-  `x-cron-secret` header.
-  The combined endpoint runs shift monitoring, then the notification worker
-  for up to three passes. Separate `GET` and `POST` endpoints are also
-  available at `/api/cron/shift-monitor` and
-  `/api/cron/notification-worker`.
-- Send the configured secret in either the `Authorization` header using the
-  `Bearer` scheme or the `x-cron-secret` header.
-- Configure cron-job.org, Vercel Pro Cron, or another scheduler to use the
-  `/api/cron/tick` URL and secret header. Vercel Hobby cron is once per day;
-  use an external scheduler for the required minute-level jobs.
+  with the header `Authorization: Bearer <CRON_SECRET>` (or `x-cron-secret`).
+  The combined endpoint runs shift monitoring, then the notification worker for
+  up to three passes, inside a 25-second budget, and returns a JSON summary:
+  `monitorRan`, `notificationsQueued`, `sent`, `failed`, `durationMs`,
+  `timedOut`. Separate `GET` and `POST` endpoints are also available at
+  `/api/cron/shift-monitor` and `/api/cron/notification-worker`.
+- `backend/vercel.json` sets `maxDuration` to 60 seconds for the API function.
+- Use cron-job.org, Vercel Pro Cron, or another scheduler for the minute-level
+  call. Vercel Hobby cron is once per day, which is not enough.
 - Set `RUN_JOBS_IN_PROCESS=false` on serverless deployments. On an always-on
   server, set it to `true` (the default) and run only one backend instance.
 - `OVERTIME_REPEAT_MINUTES=0` disables automatic repeat alerts; positive

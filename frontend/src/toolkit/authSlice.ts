@@ -2,6 +2,7 @@ import { createSlice } from '@reduxjs/toolkit';
 import type { AuthUser } from '../types';
 import { fetchMe, login, register, logout } from './authThunks';
 import type { ThunkReject } from './createAppThunk';
+import { shouldLogoutOnAuthCheckFailure } from './sessionRules';
 
 interface AuthState {
   user: AuthUser | null;
@@ -10,6 +11,8 @@ interface AuthState {
   error: string | null;
   errorStatus: number | null;
   fieldErrors?: { field: string; message: string }[];
+  /** Set when the account check could not reach the server. The user is NOT logged out. */
+  connectionError: string | null;
 }
 
 const initialState: AuthState = {
@@ -19,6 +22,7 @@ const initialState: AuthState = {
   error: null,
   errorStatus: null,
   fieldErrors: undefined,
+  connectionError: null,
 };
 
 function splitErr(p: ThunkReject | undefined): [number, string, { field: string; message: string }[] | undefined] {
@@ -42,6 +46,7 @@ const authSlice = createSlice({
       state.error = null;
       state.errorStatus = null;
       state.fieldErrors = undefined;
+      state.connectionError = null;
     },
     clearAuthError(state) {
       state.error = null;
@@ -53,13 +58,27 @@ const authSlice = createSlice({
     },
   },
   extraReducers: (b) => {
-    b.addCase(fetchMe.fulfilled, (s, a) => {
-      s.user = a.payload;
-      s.bootstrapped = true;
+    b.addCase(fetchMe.pending, (s) => {
+      s.connectionError = null;
     })
-      .addCase(fetchMe.rejected, (s) => {
-        s.user = null;
+      .addCase(fetchMe.fulfilled, (s, a) => {
+        s.user = a.payload;
         s.bootstrapped = true;
+        s.connectionError = null;
+      })
+      .addCase(fetchMe.rejected, (s, a) => {
+        const payload = a.payload;
+        const status = typeof payload === 'object' ? payload.status : undefined;
+        if (shouldLogoutOnAuthCheckFailure(status)) {
+          s.user = null;
+          s.bootstrapped = true;
+          s.connectionError = null;
+          return;
+        }
+        // Network error, timeout or server error: keep any signed-in user and offer a retry.
+        s.connectionError =
+          (typeof payload === 'object' ? payload.message : payload) ||
+          'Could not reach the server. Please try again.';
       })
       .addCase(login.pending, (s) => {
         s.submitting = true;
@@ -122,6 +141,7 @@ export const selectIsBootstrapped = (s: { auth: AuthState }) => s.auth.bootstrap
 export const selectAuthError = (s: { auth: AuthState }) => s.auth.error;
 export const selectAuthErrorStatus = (s: { auth: AuthState }) => s.auth.errorStatus;
 export const selectAuthFieldErrors = (s: { auth: AuthState }) => s.auth.fieldErrors;
+export const selectConnectionError = (s: { auth: AuthState }) => s.auth.connectionError;
 export const selectAuthSubmitting = (s: { auth: AuthState }) => s.auth.submitting;
 
 export default authSlice.reducer;

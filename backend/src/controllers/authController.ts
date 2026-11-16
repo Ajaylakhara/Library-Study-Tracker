@@ -1,13 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { User } from '../models/User';
-import { config } from '../config';
 import { createError } from '../middleware/errorHandler';
 import { AuthRequest } from '../middleware/auth';
 import { getAssignableSeatNumbers, assertSeatAssignable } from '../utils/seatAssignments';
 import { NotificationService } from '../services/notifications/NotificationService';
+import { clearSessionCookie, setSessionCookie, signSessionToken } from '../services/authTokens';
+import {
+  THROTTLE_MESSAGE,
+  clearLoginFailures,
+  clientIp,
+  isLoginBlocked,
+  recordLoginFailure,
+} from '../services/loginThrottle';
 
 // Pre-computed dummy bcrypt hash to equalize response times against timing attacks
 const DUMMY_HASH = '$2a$12$e86GyPqL.M0M5V6GkKxK3uJ1E6E/eC6i6q6I2e6G5E6D6C6B6A6a6';
@@ -52,28 +58,6 @@ async function recordFailedLogin(userId: string): Promise<void> {
       },
     ]
   );
-}
-
-function signToken(userId: string, role: string, tokenVersion: number): string {
-  const expiresIn = role === 'admin' ? config.jwt.adminExpiresIn : config.jwt.studentExpiresIn;
-  return jwt.sign({ userId, role, tokenVersion }, config.jwt.secret, { expiresIn } as jwt.SignOptions);
-}
-
-function setCookieToken(res: Response, token: string, role: string): void {
-  const maxAge =
-    role === 'admin'
-      ? 24 * 60 * 60 * 1000 // 1 day
-      : 30 * 24 * 60 * 60 * 1000; // 30 days
-
-  const sameSite = config.isProduction ? 'strict' : 'lax';
-
-  res.cookie('token', token, {
-    httpOnly: true,
-    sameSite,
-    secure: config.isProduction,
-    path: '/',
-    maxAge,
-  });
 }
 
 export const register = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -138,22 +122,26 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
   try {
     const { phone, pin } = loginSchema.parse(req.body);
     const GENERIC_ERROR = 'Phone or PIN is wrong.';
+    const ip = clientIp(req);
+
+    // Locked out by phone or address: same answer whether or not the phone number exists.
+    if (await isLoginBlocked(phone, ip)) {
+      await bcrypt.compare(pin, DUMMY_HASH);
+      throw createError(THROTTLE_MESSAGE, 429);
+    }
 
     const admin = await User.findOne({ phone, role: 'admin', isDeleted: false }).select('+pinHash +tokenVersion');
     const user = admin ?? await User.findByPhone(phone);
 
     if (!user || user.isDeleted) {
       await bcrypt.compare(pin, DUMMY_HASH);
+      await recordLoginFailure(phone, ip);
       throw createError(GENERIC_ERROR, 401);
     }
 
-    // Check lock
+    // Older per-account lock (kept for accounts locked before the shared throttle existed).
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      const remaining = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-      throw createError(
-        `Account locked due to too many failed attempts. Try again in ${remaining} minute(s).`,
-        429
-      );
+      throw createError(THROTTLE_MESSAGE, 429);
     }
 
     // Check PIN
@@ -165,10 +153,12 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
     }
     if (!isMatch) {
       await recordFailedLogin(user._id.toString());
+      await recordLoginFailure(phone, ip);
       throw createError(GENERIC_ERROR, 401);
     }
 
     // Reset lockout on success
+    await clearLoginFailures(phone);
     if (user.failedAttempts > 0 || user.lockedUntil) {
       await User.findByIdAndUpdate(user._id, { failedAttempts: 0, lockedUntil: null });
     }
@@ -183,8 +173,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       );
     }
 
-    const token = signToken(user._id.toString(), user.role, user.tokenVersion ?? 0);
-    setCookieToken(res, token, user.role);
+    setSessionCookie(res, signSessionToken(user._id.toString(), user.role, user.tokenVersion ?? 0));
 
     res.json({
       success: true,
@@ -205,12 +194,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
 };
 
 export const logout = (_req: Request, res: Response): void => {
-  res.clearCookie('token', {
-    httpOnly: true,
-    path: '/',
-    sameSite: config.isProduction ? 'strict' : 'lax',
-    secure: config.isProduction,
-  });
+  clearSessionCookie(res);
   res.json({ success: true, message: 'Logged out successfully.' });
 };
 

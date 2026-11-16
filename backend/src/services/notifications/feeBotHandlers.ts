@@ -151,7 +151,7 @@ export async function showFeeStudent(userId: string, render: FeeBotRender): Prom
     `Preferred channel: ${escapeHtml(student.preferredChannel)} · Telegram linked: ${student.telegramChatId ? 'Yes' : 'No'}`,
     `Total due: ₹${totals.total.toLocaleString('en-IN')}`,
     lastReminder?.lastReminderAt
-      ? `Last reminder: ${lastReminder.lastReminderAt.toLocaleString('en-IN')} · ${lastReminder.lastReminderChannel ?? '—'}`
+      ? `Last reminder: ${lastReminder.lastReminderAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} · ${lastReminder.lastReminderChannel ?? '—'}`
       : 'Last reminder: Not reminded',
     '',
     `<b>Recent fees · ${escapeHtml(libraryName)}</b>`,
@@ -181,7 +181,7 @@ export async function showFeeReminderOptions(feeId: string, render: FeeBotRender
   const reminder = await prepareReminder({ feeId });
   const channels: ReminderChannel[] = reminder.channels;
   const when = reminder.lastReminder
-    ? `\n\n⚠️ Last reminder: ${reminder.lastReminder.sentAt.toLocaleString('en-IN')}, ${reminder.lastReminder.channel}. Confirm if you want to send another.`
+    ? `\n\n⚠️ Last reminder: ${reminder.lastReminder.sentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}, ${reminder.lastReminder.channel}. Confirm if you want to send another.`
     : '';
   const buttons = channels.map((channel) => ({
     text: `${channel === reminder.preferredChannel ? '★ ' : ''}${channel === 'whatsapp' ? '💬 WhatsApp' : channel === 'sms' ? '📱 SMS' : '✈️ Telegram'}`,
@@ -223,7 +223,7 @@ export async function sendFeeReminderFromBot(
     }]);
     rows.push([{ text: '🏠 Menu', callback_data: cb('menu', '0') }]);
     await render(
-      `⚠️ A reminder was sent within the last 24 hours. Last reminder: ${result.lastReminder?.sentAt.toLocaleString('en-IN')}, ${result.lastReminder?.channel}.\n\nSend another?`,
+      `⚠️ A reminder was sent within the last 24 hours. Last reminder: ${result.lastReminder?.sentAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}, ${result.lastReminder?.channel}.\n\nSend another?`,
       rows
     );
     return;

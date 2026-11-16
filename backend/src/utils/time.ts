@@ -7,6 +7,15 @@ export function nowIST(): Date {
   return toZonedTime(new Date(), TZ);
 }
 
+/**
+ * Format an instant as IST wall-clock text. date-fns-tz's format() does NOT convert the
+ * instant itself (the timeZone option only affects zone tokens), so on a UTC server such
+ * as Vercel it would print UTC times. Always go through this helper for display text.
+ */
+export function formatIST(date: Date, pattern: string): string {
+  return format(toZonedTime(date, TZ), pattern, { timeZone: TZ });
+}
+
 /** Format a date as 'YYYY-MM' in IST */
 export function toMonthString(date: Date): string {
   return format(toZonedTime(date, TZ), 'yyyy-MM', { timeZone: TZ });
@@ -29,6 +38,8 @@ export function endOfMonthIST(yearMonth: string): Date {
 /** Previous month string from now (IST) */
 export function previousMonthString(): string {
   const ist = toZonedTime(new Date(), TZ);
+  // Move to day 1 first: on the 29th-31st, setMonth() alone overflows into the current month.
+  ist.setDate(1);
   ist.setMonth(ist.getMonth() - 1);
   return format(ist, 'yyyy-MM', { timeZone: TZ });
 }

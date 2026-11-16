@@ -8,6 +8,11 @@ import { logout } from '../toolkit/authThunks';
 import { get } from '../store/api';
 import { ENDPOINTS } from '../config/endpoints';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Modal } from '../components/Modal';
+import { Button } from '../components/Button';
+import { useInactivityLogout } from '../hooks/useInactivityLogout';
+import { showToast } from '../toolkit/toastSlice';
+import { ADMIN_INACTIVITY_TIMEOUT_MINUTES, ADMIN_INACTIVITY_WARNING_SECONDS } from '../config/constants';
 import { usePolling } from '../hooks/usePolling';
 import { initials } from '../helper/formatMinutes';
 
@@ -265,6 +270,20 @@ function Sidebar({ compact, onNavigate }: { compact?: boolean; onNavigate?: () =
 export function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const dispatch = useAppDispatch();
+
+  const signOutNow = useCallback(async (reason?: string) => {
+    await dispatch(logout());
+    if (reason) dispatch(showToast('info', reason));
+    navigate('/login', { replace: true });
+  }, [dispatch, navigate]);
+
+  // Optional idle sign-out for the admin screen; set the minutes constant to 0 to turn it off.
+  const inactivity = useInactivityLogout({
+    timeoutMs: ADMIN_INACTIVITY_TIMEOUT_MINUTES * 60_000,
+    warningMs: ADMIN_INACTIVITY_WARNING_SECONDS * 1000,
+    onExpire: () => void signOutNow('You were signed out after a period of inactivity.'),
+  });
   const [header, setHeaderState] = useState<{ title: string; subtitle?: string }>({ title: 'Dashboard', subtitle: 'Right now in the reading hall' });
   const [drawer, setDrawer] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -527,6 +546,22 @@ export function AdminLayout() {
             </main>
           </div>
         </div>
+        <Modal
+          open={inactivity.warning}
+          onClose={inactivity.stayActive}
+          title="Still there?"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => void signOutNow()}>Log out now</Button>
+              <Button onClick={inactivity.stayActive} data-autofocus>Stay signed in</Button>
+            </>
+          }
+        >
+          <p className="text-[15px] leading-relaxed" style={{ color: '#5A6A7F' }}>
+            You have been inactive for a while. For security you will be signed out in{' '}
+            <strong>{inactivity.secondsLeft}</strong> second{inactivity.secondsLeft === 1 ? '' : 's'}.
+          </p>
+        </Modal>
       </BadgeCtx.Provider>
     </AdminCtx.Provider>
   );

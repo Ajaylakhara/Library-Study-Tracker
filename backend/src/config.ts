@@ -76,6 +76,24 @@ if (!Number.isInteger(parsedOvertimeRepeatMinutes) || parsedOvertimeRepeatMinute
   throw new Error('OVERTIME_REPEAT_MINUTES must be a non-negative integer.');
 }
 
+// A forged-token risk if the secret is missing or guessable, so there is deliberately no fallback.
+const KNOWN_PLACEHOLDER_SECRETS = [
+  'dev_secret_change_me_in_production_32chars!!',
+  'your_super_secret_jwt_key_change_in_production_min_32_chars',
+];
+const jwtSecret = process.env.JWT_SECRET?.trim() ?? '';
+if (!jwtSecret) {
+  throw new Error('CRITICAL: JWT_SECRET is not set. Define a long random JWT_SECRET (at least 32 characters) in the backend environment.');
+}
+if (process.env.NODE_ENV === 'production') {
+  if (jwtSecret.length < 32) {
+    throw new Error('CRITICAL: JWT_SECRET must be at least 32 characters long in production.');
+  }
+  if (KNOWN_PLACEHOLDER_SECRETS.includes(jwtSecret)) {
+    throw new Error('CRITICAL: JWT_SECRET is a published placeholder value. Generate a unique random secret for production.');
+  }
+}
+
 if (!rawMongoUri) {
   throw new Error(
     process.env.NODE_ENV === 'test'
@@ -92,9 +110,7 @@ export const config = {
   mongoUri: rawMongoUri,
 
   jwt: {
-    secret: process.env.JWT_SECRET ?? 'dev_secret_change_me_in_production_32chars!!',
-    adminExpiresIn: process.env.ADMIN_JWT_EXPIRES_IN ?? '1d',
-    studentExpiresIn: process.env.STUDENT_JWT_EXPIRES_IN ?? '30d',
+    secret: jwtSecret,
   },
 
   authRateLimitMax: parseInt(process.env.AUTH_RATE_LIMIT_MAX ?? '20', 10),

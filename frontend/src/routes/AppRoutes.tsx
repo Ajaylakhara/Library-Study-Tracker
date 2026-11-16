@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } fr
 import { useBootstrap, ProtectedRoute, homeFor } from '../components/ProtectedRoute';
 import { RouteError } from '../components/ErrorBoundary';
 import { PageLoader } from '../components/Spinner';
+import { ConnectionProblem } from '../components/ConnectionProblem';
 import { StudentLayout } from '../layout/StudentLayout';
 import { AdminLayout } from '../layout/AdminLayout';
 import { useAppSelector } from '../hooks/useRedux';
@@ -59,6 +60,8 @@ function BrandingMetadata() {
 export function PublicOnlyRoute() {
   const ready = useBootstrap();
   const user = useAppSelector((s) => s.auth.user);
+  const connectionError = useAppSelector((s) => s.auth.connectionError);
+  if (!ready && connectionError) return <ConnectionProblem />;
   if (!ready) return <PageLoader label="Loading" />;
   if (user) return <Navigate to={homeFor(user.role)} replace />;
   return <Outlet />;
@@ -67,6 +70,8 @@ export function PublicOnlyRoute() {
 export function RootRedirect() {
   const ready = useBootstrap();
   const user = useAppSelector((s) => s.auth.user);
+  const connectionError = useAppSelector((s) => s.auth.connectionError);
+  if (!ready && connectionError) return <ConnectionProblem />;
   if (!ready) return <PageLoader label="Loading" />;
   return <Navigate to={user ? homeFor(user.role) : '/login'} replace />;
 }

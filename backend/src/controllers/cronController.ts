@@ -5,9 +5,43 @@ import { JobRun, JobRunName } from '../models/JobRun';
 import { connectDB } from '../db/connectDB';
 import { runShiftMonitor, ShiftMonitorResult } from '../jobs/shiftMonitor';
 import { processQueuedNotifications, NotificationWorkerResult } from '../jobs/notificationWorker';
+import { logEvent } from '../utils/logger';
 
 const LOCK_MS = 30_000;
+/** Total time budget for one tick; must stay below maxDuration in backend/vercel.json. */
 const MAX_TICK_MS = 25_000;
+/** Part of the tick budget the shift monitor may use before the worker gets its turn. */
+const SHIFT_MONITOR_BUDGET_MS = 12_000;
+const MAX_WORKER_PASSES = 3;
+
+export interface TickSummary {
+  monitorRan: boolean;
+  notificationsQueued: number;
+  sent: number;
+  failed: number;
+  durationMs: number;
+  timedOut: boolean;
+}
+
+async function recordTick(startedAt: Date, processed: number, summary: TickSummary | null, error: unknown): Promise<void> {
+  try {
+    await JobRun.findOneAndUpdate(
+      { name: 'tick' },
+      {
+        $set: {
+          startedAt,
+          completedAt: new Date(),
+          processed,
+          error: error === null ? null : error instanceof Error ? error.name : 'Unknown tick error',
+          result: summary ? { ...summary } : null,
+        },
+      },
+      { upsert: true }
+    );
+  } catch (recordError) {
+    logEvent('error', 'cron_tick_record_failed', {}, recordError);
+  }
+}
 
 function cronSecretMatches(req: Request): boolean {
   const expected = process.env.CRON_SECRET?.trim();
@@ -76,7 +110,7 @@ async function runLocked<T extends { processed: number }>(
         },
       }
     );
-    console.error(`[Cron] ${name} failed (${error instanceof Error ? error.name : 'UnknownError'}).`);
+    logEvent('error', 'cron_job_failed', { job: name }, error);
     throw error;
   } finally {
     await JobLock.deleteOne({ name, lockedUntil: lockUntil });
@@ -105,7 +139,7 @@ async function withCronAuth(
     await connectDB();
     await action();
   } catch (error) {
-    console.error(`[Cron] Request failed (${error instanceof Error ? error.name : 'UnknownError'}).`);
+    logEvent('error', 'cron_request_failed', { path: req.path }, error);
     if (!res.headersSent) {
       res.status(500).json({
         ok: false,
@@ -157,14 +191,17 @@ export async function runCronTick(req: Request, res: Response): Promise<void> {
       return;
     }
     const started = Date.now();
+    const startedAt = new Date();
     try {
-      const shift = await runLocked('shift-monitor', runShiftMonitor);
+      const shift = await runLocked('shift-monitor', () =>
+        runShiftMonitor({ maxDurationMs: SHIFT_MONITOR_BUDGET_MS })
+      );
       let workerProcessed = 0;
       let workerSent = 0;
       let workerErrors = 0;
       let workerPasses = 0;
       let workerSkipped = false;
-      for (let pass = 0; pass < 3 && Date.now() - started < MAX_TICK_MS; pass++) {
+      for (let pass = 0; pass < MAX_WORKER_PASSES && Date.now() - started < MAX_TICK_MS; pass++) {
         const remaining = Math.max(1, MAX_TICK_MS - (Date.now() - started));
         const worker = await runLocked('notification-worker', () =>
           processQueuedNotifications(undefined, { maxDurationMs: remaining })
@@ -181,8 +218,21 @@ export async function runCronTick(req: Request, res: Response): Promise<void> {
       }
       const duration = Date.now() - started;
       const processed = (shift.result?.processed ?? 0) + workerProcessed;
+      const summary: TickSummary = {
+        monitorRan: !shift.skipped,
+        notificationsQueued: shift.result?.notificationsQueued ?? 0,
+        sent: workerSent,
+        failed: workerErrors,
+        durationMs: duration,
+        timedOut:
+          Boolean(shift.result?.timedOut) ||
+          (workerPasses === MAX_WORKER_PASSES && Date.now() - started >= MAX_TICK_MS),
+      };
+      await recordTick(startedAt, processed, summary, null);
+      logEvent('info', 'cron_tick_complete', { ...summary });
       res.json({
         ok: true,
+        ...summary,
         processed,
         duration,
         shiftMonitor: shift.skipped ? { skipped: true } : shift.result,
@@ -194,6 +244,9 @@ export async function runCronTick(req: Request, res: Response): Promise<void> {
           skipped: workerSkipped,
         },
       });
+    } catch (error) {
+      await recordTick(startedAt, 0, null, error);
+      throw error;
     } finally {
       await JobLock.deleteOne({ name: 'tick', lockedUntil: tickLock });
     }

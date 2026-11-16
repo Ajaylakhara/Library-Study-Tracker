@@ -26,6 +26,12 @@ export interface INotification extends Document {
   status: NotificationStatus;
   attempts: number;
   lastError: string | null;
+  /** When the last delivery attempt ran. Optional so older live documents stay valid. */
+  lastAttemptAt?: Date | null;
+  /** Earliest time the worker may try again (retry backoff). */
+  nextAttemptAt?: Date | null;
+  /** True when Telegram refused delivery for good (for example the bot was blocked). */
+  permanentFailure?: boolean;
   warning: string | null;
   providerMessageId: string | null;
   sentAt: Date | null;
@@ -85,6 +91,9 @@ const notificationSchema = new Schema<INotification>(
     },
     attempts: { type: Number, default: 0 },
     lastError: { type: String, default: null },
+    lastAttemptAt: { type: Date, default: null },
+    nextAttemptAt: { type: Date, default: null },
+    permanentFailure: { type: Boolean, default: false },
     warning: { type: String, default: null },
     providerMessageId: { type: String, default: null },
     sentAt: { type: Date, default: null },
@@ -138,6 +147,7 @@ notificationSchema.index(
   }
 );
 notificationSchema.index({ status: 1, attempts: 1 });
+notificationSchema.index({ status: 1, channel: 1, nextAttemptAt: 1 });
 notificationSchema.index({ user: 1, read: 1 });
 notificationSchema.index({ read: 1, status: 1, type: 1 });
 notificationSchema.index({ type: 1, actionStatus: 1 });
