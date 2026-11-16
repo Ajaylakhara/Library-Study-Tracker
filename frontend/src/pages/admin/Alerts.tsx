@@ -405,23 +405,23 @@ export function Component() {
   const retryableCount = jobsStatus?.retryableFailedCount ?? 0;
   const lastCronResult = jobsStatus?.lastCronResult ?? null;
   const jobStatusMessage = jobsStatusError
-    ? `Could not load background check status: ${jobsStatusError}`
+    ? `Could not load alert status right now. Please refresh the page. (${jobsStatusError})`
     : !jobsStatus
-      ? 'Background check status is unavailable.'
+      ? 'Alert status is unavailable right now.'
       : jobsStatus.lastCronError
-        ? `Last cron run failed: ${jobsStatus.lastCronError}`
+        ? 'The last automatic check failed, so some alerts may be delayed. Please contact the system administrator.'
       : latestJob?.error
-        ? `Last background check failed: ${latestJob.error}`
+        ? 'The last automatic check failed, so some alerts may be delayed. Please contact the system administrator.'
         : !lastJobRun && jobsStatus.schedulerMode === 'external' && !jobsStatus.cronConfigured
-          ? 'Background checks are not configured. Set CRON_SECRET and schedule /api/cron/tick every minute.'
+          ? 'Automatic alerts are not set up yet. Please contact the system administrator.'
           : !lastJobRun && jobsStatus.schedulerMode === 'external'
-            ? 'Waiting for the first cron run. Configure a scheduler to call /api/cron/tick every minute.'
+            ? 'Automatic alerts are set up and waiting for the first check. This usually takes about a minute.'
             : !lastJobRun && jobsStatus.schedulerMode === 'disabled'
-              ? 'Background checks are disabled. Enable in-process jobs or configure the external cron scheduler.'
+              ? 'Automatic alerts are turned off. Please contact the system administrator.'
               : !lastJobRun
-                ? 'No background check has run yet. The first run should appear within a minute.'
+                ? 'No automatic check has run yet. The first one should appear within a minute.'
                 : jobRunStale
-                  ? `Warning: no cron run in the last ${minutesSinceJobRun} minutes. Alerts are not being checked or delivered. Check the scheduler.`
+                  ? `Alerts have not been checked for ${minutesSinceJobRun} minutes, so new alerts may be delayed. Please contact the system administrator.`
                   : `Last background check: ${minutesSinceJobRun} minute${minutesSinceJobRun === 1 ? '' : 's'} ago`;
 
   return (
